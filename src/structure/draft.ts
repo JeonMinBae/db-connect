@@ -10,8 +10,8 @@ export interface Row {
 export type RowState = "added" | "deleted" | "modified" | "same";
 
 /** 비교하는 필드 (orig_name 제외) */
-export const FIELDS = ["name", "full_type", "nullable", "default", "auto_increment", "comment", "charset", "collation", "on_update"] as const;
-export type Field = (typeof FIELDS)[number];
+const FIELDS = ["name", "full_type", "nullable", "default", "auto_increment", "comment", "charset", "collation", "on_update"] as const;
+type Field = (typeof FIELDS)[number];
 
 export const rowsOf = (s: TableStructure): Row[] => s.columns.map((c) => ({ key: "o:" + c.name, col: { ...c }, deleted: false }));
 
@@ -21,7 +21,7 @@ export const newRow = (): Row => ({
   deleted: false,
 });
 
-export const origOf = (s: TableStructure, r: Row) => (r.col.orig_name === null ? null : (s.columns.find((c) => c.name === r.col.orig_name) ?? null));
+const origOf = (s: TableStructure, r: Row) => (r.col.orig_name === null ? null : (s.columns.find((c) => c.name === r.col.orig_name) ?? null));
 
 const norm = (f: Field, v: unknown) => (typeof v === "string" ? (f === "full_type" ? v.trim() : v) : v);
 
@@ -50,7 +50,6 @@ export function orderChanged(s: TableStructure, rows: Row[]): boolean {
 
 export const changeCount = (s: TableStructure, rows: Row[]) => rows.filter((r) => rowState(s, r) !== "same").length + (orderChanged(s, rows) ? 1 : 0);
 
-/** 서버로 보낼 초안 */
 /** 컬럼만 바꾼 초안 (나머지는 원래 구조 그대로) */
 export const toDraft = (s: TableStructure, rows: Row[]): TableStructure => ({
   ...s,
@@ -106,7 +105,7 @@ export interface Draft {
   options: TableOptions;
 }
 
-export const entriesOf = <T extends Keyed>(list: T[]): Entry<T>[] => list.map((d) => ({ key: "o:" + d.orig_name, def: structuredClone(d), deleted: false }));
+const entriesOf = <T extends Keyed>(list: T[]): Entry<T>[] => list.map((d) => ({ key: "o:" + d.orig_name, def: structuredClone(d), deleted: false }));
 
 export const newEntry = <T>(def: T): Entry<T> => ({ key: "n:" + crypto.randomUUID(), def, deleted: false });
 
@@ -198,3 +197,47 @@ export const parseList = (s: string) =>
     .filter(Boolean);
 
 export const FK_ACTIONS: FkAction[] = ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"];
+
+/**
+ * 컬럼 이름 변경을 기본키·인덱스·외래 키에 반영한다 (입력을 마쳤을 때 한 번).
+ * 바꾸기 전이나 후의 이름이 다른 컬럼과 같으면 어느 컬럼의 참조인지 알 수 없으므로 건드리지 않는다.
+ */
+export function renameColumnFor(d: Draft, key: string, from: string, to: string): Draft {
+  const others = d.columns.filter((r) => r.key !== key && !r.deleted).map((r) => r.col.name);
+  if (!to.trim() || others.includes(to) || others.includes(from)) return d;
+  return renameColumnRefs(d, from, to);
+}
+
+/** 컬럼 행 되돌리기: 정의와 함께 참조 이름도 원래대로 */
+export function revertColumn(s: TableStructure, d: Draft, key: string): Draft {
+  const row = d.columns.find((r) => r.key === key);
+  const o = row && origOf(s, row);
+  const next = { ...d, columns: revertRow(s, d.columns, key) };
+  return row && o ? renameColumnFor(next, key, row.col.name, o.name) : next;
+}
+
+/** MySQL에서 문자셋·정렬규칙을 줄 수 있는 타입 */
+export const isTextual = (type: string) => /^\s*(char|varchar|tinytext|text|mediumtext|longtext|enum|set)\b/i.test(type);
+
+export const newIndex = () => newEntry<IndexDef>({ orig_name: null, name: "", columns: [], unique: false, constraint: false, raw: null });
+export const newFk = () =>
+  newEntry<ForeignKeyDef>({ orig_name: null, name: "", columns: [], ref_schema: null, ref_table: "", ref_columns: [], on_update: "NO ACTION", on_delete: "NO ACTION" });
+export const newCheck = () => newEntry<CheckDef>({ orig_name: null, name: "", expr: "" });
+
+export const EMPTY_STRUCTURE: TableStructure = {
+  columns: [],
+  primary_key: [],
+  primary_key_name: null,
+  indexes: [],
+  foreign_keys: [],
+  checks: [],
+  checks_unsupported: false,
+  options: { comment: null, engine: null, charset: null, collation: null, row_format: null, convert: false },
+};
+
+/** 새 테이블 초안: 자동 증가 기본키 id 하나로 시작한다 */
+export function newTableDraft(d: Driver): Draft {
+  const id = newRow();
+  id.col = { ...id.col, name: "id", full_type: d === "sqlite" ? "INTEGER" : "bigint", nullable: false, auto_increment: true };
+  return { ...draftOf(EMPTY_STRUCTURE), columns: [id], pk: ["id"] };
+}

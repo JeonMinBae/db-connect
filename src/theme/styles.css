@@ -787,3 +787,12 @@ pre.raw-sql {
   gap: 2px;
   padding-left: 100px;
 }
+.col-list {
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+.col-list select {
+  width: 34px;
+  padding: 3px 2px;
+}

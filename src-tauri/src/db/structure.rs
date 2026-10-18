@@ -133,6 +133,31 @@ pub struct DdlChoices {
     pub engines: Vec<String>,
 }
 
+/// 통계 기반 추정 행 수 (PG reltuples, MySQL TABLE_ROWS). SQLite는 세지 않는다.
+pub async fn estimated_rows(pool: &DbPool, schema: &str, table: &str) -> AppResult<Option<i64>> {
+    Ok(match pool {
+        DbPool::Pg(p) => sqlx::query_scalar(&format!("SELECT reltuples::int8 FROM pg_class WHERE oid = {PG_OID}")).bind(schema).bind(table).fetch_optional(p).await?,
+        DbPool::My(p) => sqlx::query("SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?")
+            .bind(schema)
+            .bind(table)
+            .fetch_optional(p)
+            .await?
+            .and_then(|r| r.try_get_unchecked::<Option<i64>, _>(0).ok().flatten()),
+        DbPool::Lite(_) => None,
+    })
+}
+
+/// SQLite: 이 테이블을 참조하는 다른 테이블의 외래 키 (테이블, ON DELETE)
+pub async fn sqlite_referencing(c: &mut sqlx::SqliteConnection, table: &str) -> AppResult<Vec<(String, String)>> {
+    Ok(sqlx::query_as(
+        r#"SELECT DISTINCT m.name, f.on_delete FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) f
+           WHERE m.type = 'table' AND m.name <> ?1 AND f."table" = ?1 COLLATE NOCASE ORDER BY m.name"#,
+    )
+    .bind(table)
+    .fetch_all(&mut *c)
+    .await?)
+}
+
 pub async fn choices(pool: &DbPool) -> AppResult<DdlChoices> {
     Ok(match pool {
         DbPool::Pg(p) => DdlChoices {
@@ -332,9 +357,13 @@ pub fn mysql_default(raw: Option<&str>, extra: &str, data_type: &str, mariadb: b
         return if v == "NULL" { None } else { Some(v.to_string()) };
     }
     let upper = v.to_ascii_uppercase();
+    let now = upper.starts_with("CURRENT_TIMESTAMP") || upper.starts_with("NOW(") || upper.starts_with("LOCALTIME");
     if extra.to_ascii_uppercase().contains("DEFAULT_GENERATED") {
-        let bare = upper.starts_with("CURRENT_TIMESTAMP") || upper.starts_with("NOW(") || upper.starts_with("LOCALTIME");
-        return Some(if bare { v.to_string() } else { format!("({v})") });
+        return Some(if now { v.to_string() } else { format!("({v})") });
+    }
+    // MySQL 8.0.13 미만은 DEFAULT_GENERATED 표시가 없다. 날짜·시간 컬럼의 CURRENT_TIMESTAMP는 식으로 본다
+    if now && matches!(data_type, "timestamp" | "datetime") {
+        return Some(v.to_string());
     }
     if v.starts_with("b'") || (MY_NUMERIC.contains(&data_type) && v.parse::<f64>().is_ok()) {
         return Some(v.to_string());
@@ -528,7 +557,9 @@ async fn load_mysql(p: &sqlx::MySqlPool, schema: &str, table: &str) -> AppResult
         })
         .collect();
 
-    let (checks, checks_unsupported) = match sqlx::query(MY_CHECKS).bind(schema).bind(table).fetch_all(p).await {
+    // MariaDB는 CHECK 이름이 테이블 단위라 같은 스키마의 다른 테이블과 이름이 겹칠 수 있다
+    let checks_sql = if mariadb { MY_CHECKS.replace("AND t.CONSTRAINT_NAME = c.CONSTRAINT_NAME", "AND t.CONSTRAINT_NAME = c.CONSTRAINT_NAME AND t.TABLE_NAME = c.TABLE_NAME") } else { MY_CHECKS.to_string() };
+    let (checks, checks_unsupported) = match sqlx::query(&checks_sql).bind(schema).bind(table).fetch_all(p).await {
         Ok(rows) => (
             rows.iter()
                 .map(|r| {
@@ -643,6 +674,8 @@ pub async fn load_sqlite(c: &mut sqlx::SqliteConnection, table: &str) -> AppResu
 pub struct LiteAux {
     pub create_sql: String,
     pub triggers: Vec<String>,
+    /// AUTOINCREMENT 카운터 (sqlite_sequence)
+    pub seq: Option<i64>,
 }
 
 pub async fn load_sqlite_aux(c: &mut sqlx::SqliteConnection, table: &str) -> AppResult<LiteAux> {
@@ -651,7 +684,14 @@ pub async fn load_sqlite_aux(c: &mut sqlx::SqliteConnection, table: &str) -> App
         .bind(table)
         .fetch_all(&mut *c)
         .await?;
-    Ok(LiteAux { create_sql, triggers })
+    // sqlite_sequence는 AUTOINCREMENT 테이블이 처음 생길 때 만들어진다
+    let has_seq: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence')").fetch_one(&mut *c).await?;
+    let seq = if has_seq {
+        sqlx::query_scalar("SELECT seq FROM sqlite_sequence WHERE name = ?1").bind(table).fetch_optional(&mut *c).await?
+    } else {
+        None
+    };
+    Ok(LiteAux { create_sql, triggers, seq })
 }
 
 #[cfg(test)]
@@ -669,6 +709,9 @@ mod tests {
         assert_eq!(mysql_default(Some("b'1'"), "", "bit", false).unwrap(), "b'1'");
         assert_eq!(mysql_default(Some("NULL"), "", "varchar", true), None);
         assert_eq!(mysql_default(Some("'abc'"), "", "varchar", true).unwrap(), "'abc'");
+        // MySQL 5.7
+        assert_eq!(mysql_default(Some("CURRENT_TIMESTAMP"), "on update CURRENT_TIMESTAMP", "timestamp", false).unwrap(), "CURRENT_TIMESTAMP");
+        assert_eq!(mysql_default(Some("CURRENT_TIMESTAMP"), "", "varchar", false).unwrap(), "'CURRENT_TIMESTAMP'");
     }
 
     #[test]

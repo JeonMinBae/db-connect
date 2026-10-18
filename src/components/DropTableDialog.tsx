@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { create } from "zustand";
 import { api, errorMessage } from "../api";
-import type { SqlConfig } from "../api/types";
+import type { DdlPlan, SqlConfig } from "../api/types";
 import { useConnections } from "../store/connections";
 import { useTabs } from "../store/tabs";
 import { useTree } from "../store/tree";
@@ -26,34 +26,38 @@ export async function openDropTable(cfg: SqlConfig, schema: string, table: strin
 /** 테이블 이름을 그대로 입력해야 실행 버튼이 켜진다 */
 export function DropTableHost() {
   const req = useDrop((s) => s.req);
-  const [sql, setSql] = useState<string | null>(null);
+  const [plan, setPlan] = useState<DdlPlan | null>(null);
   const [typed, setTyped] = useState("");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const busy = useRef(false);
 
   useEffect(() => {
-    setSql(null);
+    setPlan(null);
     setTyped("");
     setError(null);
-    if (req) api.previewDrop(req.cfg.id, req.schema, req.table).then((s) => setSql(s.sql), (e) => setError(errorMessage(e)));
+    if (req) api.previewDrop(req.cfg.id, req.schema, req.table).then(setPlan, (e) => setError(errorMessage(e)));
   }, [req]);
 
   if (!req) return null;
-  const close = () => !running && useDrop.setState({ req: null });
+  const sql = plan?.statements[0]?.sql;
+  const close = () => !busy.current && useDrop.setState({ req: null });
   const run = async () => {
-    if (!sql || typed !== req.table) return;
+    // Enter 연타로 DROP이 두 번 나가지 않게 ref로 동기 검사한다
+    if (busy.current || !sql || typed !== req.table) return;
+    busy.current = true;
     setRunning(true);
     setError(null);
     try {
       await api.applyDdl(req.cfg.id, [sql]);
       useTabs.getState().closeTable(req.cfg.id, req.schema, req.table);
-      await useTree.getState().loadTables(req.cfg.id, req.schema, true);
-      await useConnections.getState().refreshSnapshot(req.cfg.id);
+      await Promise.all([useTree.getState().loadTables(req.cfg.id, req.schema, true), useConnections.getState().refreshSnapshot(req.cfg.id)]);
       toast(`테이블 ${req.table}을(를) 삭제했습니다.`);
       useDrop.setState({ req: null });
     } catch (e) {
       setError(errorMessage(e));
     } finally {
+      busy.current = false;
       setRunning(false);
     }
   };
@@ -75,8 +79,20 @@ export function DropTableHost() {
     >
       <div className="form" style={{ gridTemplateColumns: "1fr" }}>
         <div className="ddl-warn">
-          ⚠ 테이블 {req.schema}.{req.table}과(와) 모든 데이터가 삭제됩니다. {req.cfg.driver === "mysql" ? "되돌릴 수 없습니다." : ""}
+          ⚠ 테이블 {req.schema}.{req.table}과(와) 모든 데이터가 삭제됩니다.
+          {plan?.warnings.length ? (
+            <ul>
+              {plan.warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          ) : null}
         </div>
+        {plan?.notes.map((n, i) => (
+          <div key={i} className="hint">
+            {n}
+          </div>
+        ))}
         {sql && <pre className="raw-sql">{sql};</pre>}
         <label>
           확인을 위해 테이블 이름 <b>{req.table}</b>을(를) 입력하세요.

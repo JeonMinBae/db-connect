@@ -97,7 +97,8 @@ export const api = {
   /** original이 null이면 새 테이블(table이 새 이름). 그사이 다른 곳에서 구조가 바뀌었으면 오류 */
   previewDdl: (connId: string, schema: string, table: string, original: TableStructure | null, draft: TableStructure, newName: string | null) =>
     invoke<DdlPlan>("preview_ddl", { connId, schema, table, original, draft, newName }),
-  previewDrop: (connId: string, schema: string, table: string) => invoke<{ sql: string; destructive: boolean }>("preview_drop", { connId, schema, table }),
+  /** SQLite는 이 테이블을 참조하는 외래 키의 ON DELETE 동작을 경고로 알린다 */
+  previewDrop: (connId: string, schema: string, table: string) => invoke<DdlPlan>("preview_drop", { connId, schema, table }),
   ddlChoices: (connId: string) => invoke<DdlChoices>("ddl_choices", { connId }),
   /** 콘솔 트랜잭션과 무관한 자동 커밋 연결에서 실행 */
   applyDdl: (connId: string, statements: string[]) => invoke<void>("apply_ddl", { connId, statements }),

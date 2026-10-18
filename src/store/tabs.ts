@@ -45,6 +45,10 @@ interface TabsState {
   setDirty: (id: string, source: DirtySource, reason: string | null) => void;
 }
 
+/** 이 테이블의 데이터·구조 탭인지 */
+const isTableTab = (t: Tab, connId: string, schema: string, table: string) =>
+  (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === table;
+
 const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -134,7 +138,7 @@ export const useTabs = create<TabsState>((set, get) => {
     renameTable: (connId, schema, from, to) => {
       set((s) => ({
         tabs: s.tabs.map((t) =>
-          (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === from
+          isTableTab(t, connId, schema, from)
             ? { ...t, table: to, title: t.kind === "table" ? to : `${to} 구조` }
             : t,
         ),
@@ -143,11 +147,11 @@ export const useTabs = create<TabsState>((set, get) => {
     },
 
     closeTable: (connId, schema, table) =>
-      removeTabs(get().tabs.filter((t) => (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === table).map((t) => t.id)),
+      removeTabs(get().tabs.filter((t) => isTableTab(t, connId, schema, table)).map((t) => t.id)),
 
     pendingFor: (connId, schema, table, except) =>
       get().tabs.find(
-        (t) => t.id !== except && (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === table && get().dirty[t.id]?.edit,
+        (t) => t.id !== except && isTableTab(t, connId, schema, table) && get().dirty[t.id]?.edit,
       ),
 
     openRedisKey: (connId, db, key, binary) => {

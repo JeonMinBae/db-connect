@@ -32,6 +32,7 @@ export function DdlPreview(props: {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const editor = useRef<SqlEditorHandle>(null);
+  const busy = useRef(false);
 
   useEffect(() => {
     api
@@ -44,13 +45,15 @@ export function DdlPreview(props: {
   }, []);
 
   const run = async () => {
-    if (running || original === null) return;
+    // 연타 대비: state는 다음 렌더에야 바뀌므로 ref로 동기 검사한다
+    if (busy.current || original === null) return;
     setError(null);
     editor.current?.markRunning(null);
     const list = splitStatements(editor.current?.getText() ?? "", cfg.driver);
     if (!list.length) return setError("실행할 문장이 없습니다.");
     const tx = list.findIndex((s) => s.kind === "tx");
     if (tx >= 0) return setError(`${tx + 1}번째 문장: 트랜잭션 제어문(${list[tx].firstKeyword})은 넣을 수 없습니다.`);
+    busy.current = true;
     setRunning(true);
     try {
       await api.applyDdl(cfg.id, list.map((s) => s.text));
@@ -64,6 +67,7 @@ export function DdlPreview(props: {
         if (cfg.driver === "mysql" && idx > 0) props.onPartial();
       }
     } finally {
+      busy.current = false;
       setRunning(false);
     }
   };

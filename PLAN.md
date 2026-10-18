@@ -1349,7 +1349,7 @@ parseShellValue(`{ _id: ObjectId("65f0a1b2c3d4e5f601234567"), at: { $gt: ISODate
 
 순서: S1 → S2 → S3 → S4. 각 단계에서 PG · MySQL · SQLite를 모두 마친다. SQLite는 인메모리 실행 테스트로, PG/MySQL은 생성 SQL 스냅샷 테스트로 완료를 판단한다. 실제 서버 검증은 Docker 준비 후 하며, 그때까지는 "서버 검증은 Docker 준비 후"로 표시한다.
 
-### S1. 구조 메타 확장 · 구조 탭 · 컬럼 편집 ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후 · 실제 앱에서 SQLite로 화면·적용·데이터 탭 갱신 확인. 구현 메모: 미리보기는 SubmitPreview와 같은 방식의 별도 `DdlPreview`, `preview_ddl`은 안내(notes)를 함께 돌려주고 DB의 현재 구조와 `original`이 다르면 거부, `apply_ddl`은 문장 문자열 목록을 받음. "새 테이블" 메뉴는 S3, 제약·옵션 섹션은 S2·S4에서 추가. SQLite 재생성은 CHECK·COLLATE·ON CONFLICT·생성 컬럼·DEFERRABLE이 있는 테이블은 거부)
+### S1. 구조 메타 확장 · 구조 탭 · 컬럼 편집 ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후 · 실제 앱에서 SQLite로 화면·적용·데이터 탭 갱신 확인. 구현 메모: 미리보기는 SubmitPreview와 같은 방식의 별도 `DdlPreview`, `preview_ddl`은 안내(notes)를 함께 돌려주고 DB의 현재 구조와 `original`이 다르면 거부, `apply_ddl`은 문장 문자열 목록을 받음. "새 테이블" 메뉴는 S3, 제약·옵션 섹션은 S2·S4에서 추가. SQLite 재생성은 COLLATE·ON CONFLICT·생성 컬럼·DEFERRABLE이 있는 테이블은 거부(CHECK는 S2부터 파싱해 보존))
 
 **작업 내용**
 - 메타 확장 커맨드 `table_structure(conn_id, schema, table) -> TableStructure`. 기존 `list_columns`는 그대로 둔다.
@@ -1366,7 +1366,7 @@ parseShellValue(`{ _id: ObjectId("65f0a1b2c3d4e5f601234567"), at: { $gt: ISODate
     - `AUTOINCREMENT` 여부: `sqlite_master.sql`을 보고 판단한다.
 - 프론트
   - 트리 메뉴: 테이블에 "구조 편집"(뷰는 비활성), 스키마에 "새 테이블"(S3에서 활성).
-  - 탭 종류 `tableStructure`. 섹션은 컬럼 / 인덱스 / 제약 / 옵션이며, S1에서는 컬럼만 편집할 수 있고 나머지는 보기만 한다.
+  - 탭 종류 `structure`. 섹션은 컬럼 / 인덱스 / 제약 / 옵션이며, S1에서는 컬럼만 편집할 수 있고 나머지는 보기만 한다.
   - 상태: `{ original: TableStructure, draft: TableStructure }`. 컬럼의 이름 변경과 수정을 구분하려고 컬럼마다 안정 키 `origName`을 둔다.
   - 행 색 표시(추가/수정/삭제), 행별 되돌리기, 전체 취소. 타입 입력은 `<input list>` + DB별 타입 목록 상수.
   - MySQL만: 컬럼 순서 위/아래 이동.

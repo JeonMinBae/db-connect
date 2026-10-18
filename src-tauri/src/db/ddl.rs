@@ -24,6 +24,9 @@ pub struct DdlPlan {
     pub warnings: Vec<String>,
     /// 미리보기에 함께 보여 줄 안내
     pub notes: Vec<String>,
+    /// SQLite 재생성 계획 (테이블 이름 변경을 붙일 때 legacy_alter_table을 먼저 끈다)
+    #[serde(skip)]
+    pub rebuild: bool,
 }
 
 impl DdlPlan {
@@ -110,7 +113,11 @@ struct Diff<'a> {
     cols: Matched<'a, ColumnDef>,
     /// 컬럼 순서가 처음으로 달라지는 초안 위치 (기준: 남은 컬럼의 원래 순서 + 새 컬럼은 맨 뒤)
     first_moved: Option<usize>,
+    /// MySQL: 위치 절(FIRST/AFTER)이 필요한 초안 항목. 원래 순서를 지키는 가장 긴 부분열에 든 컬럼은 건드리지 않는다.
+    needs_pos: Vec<bool>,
     renamed: HashMap<String, String>,
+    /// 삭제한 원래 컬럼 이름
+    dropped: HashSet<String>,
     pk_changed: bool,
     idx_drop: Vec<&'a IndexDef>,
     idx_add: Vec<&'a IndexDef>,
@@ -121,8 +128,16 @@ struct Diff<'a> {
 }
 
 impl Diff<'_> {
+    /// 원래 항목의 컬럼 목록을 초안 이름으로 옮긴다. 삭제한 컬럼은 어떤 이름과도 같지 않게 바꿔,
+    /// 같은 이름으로 다시 추가한 컬럼을 원래 컬럼으로 착각하지 않게 한다 (DROP COLUMN이 걸린 제약을 함께 지우므로 다시 만들어야 한다).
     fn map_cols(&self, cols: &[String]) -> Vec<String> {
-        cols.iter().map(|c| self.renamed.get(c).cloned().unwrap_or_else(|| c.clone())).collect()
+        cols.iter()
+            .map(|c| match self.renamed.get(c) {
+                Some(n) => n.clone(),
+                None if self.dropped.contains(c) => format!("\u{0}{c}"),
+                None => c.clone(),
+            })
+            .collect()
     }
     fn constraints_changed(&self) -> bool {
         self.pk_changed || !self.fk_drop.is_empty() || !self.fk_add.is_empty() || !self.ck_drop.is_empty() || !self.ck_add.is_empty()
@@ -184,6 +199,38 @@ fn validate(d: Driver, draft: &TableStructure) -> AppResult<()> {
     Ok(())
 }
 
+/// 초안 순서의 (원래 위치 | 새 컬럼) → 위치 절이 필요한 항목.
+/// 원래 위치가 증가하는 가장 긴 부분열은 그대로 두고, 나머지 기존 컬럼과 그 뒤에 기존 컬럼이 오는 새 컬럼만 옮긴다.
+/// 위치 절은 초안 순서대로 "AFTER 바로 앞 컬럼"으로 붙이므로 앞에서부터 차례로 제자리를 찾는다.
+fn positions_needed(orig_pos: &[Option<usize>]) -> Vec<bool> {
+    let kept: Vec<usize> = (0..orig_pos.len()).filter(|&i| orig_pos[i].is_some()).collect();
+    // O(n²) LIS: 컬럼 수는 많아야 수백 개
+    let mut len = vec![1usize; kept.len()];
+    let mut prev = vec![usize::MAX; kept.len()];
+    for j in 0..kept.len() {
+        for i in 0..j {
+            if orig_pos[kept[i]] < orig_pos[kept[j]] && len[i] + 1 > len[j] {
+                len[j] = len[i] + 1;
+                prev[j] = i;
+            }
+        }
+    }
+    let mut in_lis = vec![false; orig_pos.len()];
+    let mut k = (0..kept.len()).max_by_key(|&j| len[j]);
+    while let Some(j) = k {
+        in_lis[kept[j]] = true;
+        k = (prev[j] != usize::MAX).then_some(prev[j]);
+    }
+    let last_kept = kept.last().copied();
+    (0..orig_pos.len())
+        .map(|i| match orig_pos[i] {
+            Some(_) => !in_lis[i],
+            // 새 컬럼은 뒤에 기존 컬럼이 있을 때만 위치가 필요하다 (없으면 ADD가 맨 뒤에 붙인다)
+            None => last_kept.is_some_and(|l| l > i),
+        })
+        .collect()
+}
+
 fn diff<'a>(d: Driver, orig: &'a TableStructure, draft: &'a TableStructure) -> AppResult<Diff<'a>> {
     validate(d, draft)?;
     let cols = match_items("컬럼", &orig.columns, &draft.columns)?;
@@ -203,12 +250,16 @@ fn diff<'a>(d: Driver, orig: &'a TableStructure, draft: &'a TableStructure) -> A
     baseline.sort_by_key(|&i| pos_of(&items[i].0.unwrap().name));
     baseline.extend((0..items.len()).filter(|&i| items[i].0.is_none()));
     let first_moved = baseline.iter().enumerate().position(|(k, &i)| k != i);
+    let needs_pos = positions_needed(&items.iter().map(|(a, _)| a.map(|a| pos_of(&a.name))).collect::<Vec<_>>());
     let renamed: HashMap<String, String> =
         items.iter().filter_map(|(a, b)| a.filter(|a| a.name != b.name).map(|a| (a.name.clone(), b.name.clone()))).collect();
+    let dropped = cols.drops.iter().map(|c| c.name.clone()).collect();
 
     let mut diff = Diff {
         first_moved,
+        needs_pos,
         renamed,
+        dropped,
         pk_changed: false,
         idx_drop: vec![],
         idx_add: vec![],
@@ -250,12 +301,20 @@ pub fn plan_alter(d: Driver, schema: Option<&str>, table: &str, orig: &TableStru
     }?;
     let mut warnings: Vec<String> = diff.cols.drops.iter().map(|c| format!("컬럼 {} 삭제: 이 컬럼의 데이터가 사라집니다.", c.name)).collect();
     for (a, b) in &diff.cols.items {
-        if let Some(a) = a.filter(|a| !a.full_type.trim().eq_ignore_ascii_case(b.full_type.trim())) {
+        let Some(a) = a else { continue };
+        if !a.full_type.trim().eq_ignore_ascii_case(b.full_type.trim()) {
             warnings.push(format!("컬럼 {} 타입 변경 ({} → {}): 값이 바뀌거나 변환에 실패할 수 있습니다.", b.name, a.full_type.trim(), b.full_type.trim()));
         }
+        if a.charset != b.charset || a.collation != b.collation {
+            warnings.push(format!("컬럼 {} 문자셋·정렬규칙 변경: 값이 변환되거나 정렬·비교 결과가 달라질 수 있습니다.", b.name));
+        }
+        if a.nullable && !b.nullable {
+            let mysql = if d == Driver::Mysql { " (MySQL 비엄격 모드에서는 NULL이 0이나 빈 문자열로 바뀝니다)" } else { "" };
+            warnings.push(format!("컬럼 {} NOT NULL 지정: NULL인 행이 있으면 실패합니다{mysql}.", b.name));
+        }
     }
-    if plan.statements.iter().any(|s| s.sql.starts_with("DROP TABLE")) {
-        warnings.push("테이블을 새로 만들어 데이터를 옮긴 뒤 원래 테이블을 삭제합니다(DROP TABLE). 실패하면 모두 롤백됩니다.".into());
+    if d == Driver::Mysql && plan.statements.len() > 1 {
+        warnings.push("MySQL DDL은 문장마다 바로 반영됩니다. 뒤 문장이 실패하면 앞 문장(외래 키 삭제 등)만 반영된 채 남습니다.".into());
     }
     warnings.append(&mut plan.warnings);
     plan.warnings = warnings;
@@ -273,6 +332,17 @@ pub fn plan_rename(d: Driver, schema: Option<&str>, table: &str, new_name: &str)
         _ => format!("ALTER TABLE {from} RENAME TO {}", quote_ident(d, new_name)),
     };
     Ok(DdlStmt { sql, destructive: false })
+}
+
+/// 다른 변경 뒤에 테이블 이름 변경을 붙인다.
+/// SQLite 재생성은 legacy_alter_table을 켜고 실행하는데, 그 상태로 이름을 바꾸면 다른 테이블의 외래 키·뷰·트리거가
+/// 옛 이름을 가리킨 채 남는다. 그래서 이름 변경 직전에 끈다 (실행 후 원래 값으로 되돌린다).
+pub fn append_rename(plan: &mut DdlPlan, d: Driver, schema: Option<&str>, table: &str, new_name: &str) -> AppResult<()> {
+    if plan.rebuild {
+        plan.push("PRAGMA legacy_alter_table = OFF".into(), false);
+    }
+    plan.statements.push(plan_rename(d, schema, table, new_name)?);
+    Ok(())
 }
 
 pub fn plan_drop(d: Driver, schema: Option<&str>, table: &str) -> DdlStmt {
@@ -321,7 +391,7 @@ pub fn plan_create(d: Driver, schema: Option<&str>, table: &str, draft: &TableSt
             }
             if d == Driver::Mysql {
                 for ix in &draft.indexes {
-                    lines.push(format!("{}INDEX {} ({})", if ix.unique { "UNIQUE " } else { "" }, q(&ix.name), col_list(d, &ix.columns)));
+                    lines.push(index_def(d, ix));
                 }
             }
             for c in &draft.checks {
@@ -338,12 +408,12 @@ pub fn plan_create(d: Driver, schema: Option<&str>, table: &str, draft: &TableSt
     p.push(format!("CREATE TABLE {t} (\n  {body}\n){suffix}"), false);
     if d != Driver::Mysql {
         for ix in draft.indexes.iter().filter(|ix| !(d == Driver::Sqlite && ix.constraint)) {
-            p.push(format!("CREATE {}INDEX {} ON {t} ({})", if ix.unique { "UNIQUE " } else { "" }, q(&ix.name), col_list(d, &ix.columns)), false);
+            p.push(create_index(d, &t, ix), false);
         }
     }
     if d == Driver::Postgres {
         if let Some(c) = &draft.options.comment {
-            p.push(format!("COMMENT ON TABLE {t} IS {}", literal(d, Some(c))), false);
+            p.push(comment_on_table(d, &t, Some(c)), false);
         }
         for c in draft.columns.iter().filter(|c| c.comment.is_some()) {
             p.push(comment_on(&t, &q(&c.name), c.comment.as_deref()), false);
@@ -364,6 +434,20 @@ fn named(d: Driver, name: &str) -> String {
     } else {
         format!("CONSTRAINT {} ", quote_ident(d, name))
     }
+}
+
+/// `[UNIQUE ]INDEX 이름 (컬럼…)` (MySQL CREATE TABLE·ALTER TABLE ADD 안에서)
+fn index_def(d: Driver, ix: &IndexDef) -> String {
+    format!("{}INDEX {} ({})", if ix.unique { "UNIQUE " } else { "" }, quote_ident(d, &ix.name), col_list(d, &ix.columns))
+}
+
+fn create_index(d: Driver, t: &str, ix: &IndexDef) -> String {
+    format!("CREATE {}INDEX {} ON {t} ({})", if ix.unique { "UNIQUE " } else { "" }, quote_ident(d, &ix.name), col_list(d, &ix.columns))
+}
+
+/// PG 테이블 코멘트 (None이면 지운다)
+fn comment_on_table(d: Driver, t: &str, comment: Option<&str>) -> String {
+    format!("COMMENT ON TABLE {t} IS {}", comment.map_or("NULL".to_string(), |c| literal(d, Some(c))))
 }
 
 fn check_clause(d: Driver, c: &CheckDef) -> String {
@@ -497,7 +581,7 @@ fn pg_plan(t: &str, schema: &str, orig: &TableStructure, draft: &TableStructure,
         p.push(format!("ALTER TABLE {t} ADD PRIMARY KEY ({})", col_list(PG, &draft.primary_key)), false);
     }
     for ix in &d.idx_add {
-        p.push(format!("CREATE {}INDEX {} ON {t} ({})", if ix.unique { "UNIQUE " } else { "" }, q(&ix.name), col_list(PG, &ix.columns)), false);
+        p.push(create_index(PG, t, ix), false);
     }
     for c in &d.ck_add {
         p.push(format!("ALTER TABLE {t} ADD {}", check_clause(PG, c)), false);
@@ -506,7 +590,7 @@ fn pg_plan(t: &str, schema: &str, orig: &TableStructure, draft: &TableStructure,
         p.push(format!("ALTER TABLE {t} ADD {}", fk_clause(PG, Some(schema), f)), false);
     }
     if orig.options.comment != draft.options.comment {
-        p.push(format!("COMMENT ON TABLE {t} IS {}", draft.options.comment.as_deref().map_or("NULL".to_string(), |c| literal(PG, Some(c)))), false);
+        p.push(comment_on_table(PG, t, draft.options.comment.as_deref()), false);
     }
     Ok(p)
 }
@@ -559,6 +643,11 @@ fn my_option_clauses(a: &TableOptions, b: &TableOptions) -> AppResult<(Vec<Strin
         if let Some(e) = opt(&b.engine) {
             clauses.push(format!("ENGINE = {e}"));
             warnings.push(format!("엔진 변경 ({} → {e}): 테이블 전체를 다시 쓰고, 그동안 테이블이 잠깁니다.", opt(&a.engine).unwrap_or("?")));
+            match e.to_ascii_uppercase().as_str() {
+                "BLACKHOLE" => warnings.push("BLACKHOLE 엔진은 데이터를 저장하지 않습니다. 기존 행이 모두 사라집니다.".into()),
+                "MEMORY" | "HEAP" => warnings.push("MEMORY 엔진은 서버를 재시작하면 데이터가 사라집니다.".into()),
+                _ => {}
+            }
         }
     }
     if opt(&a.charset) != opt(&b.charset) || opt(&a.collation) != opt(&b.collation) {
@@ -633,10 +722,7 @@ fn my_plan(t: &str, schema: Option<&str>, orig: &TableStructure, draft: &TableSt
         destructive = true;
     }
     for (k, (a, b)) in d.cols.items.iter().enumerate() {
-        let pos = match d.first_moved {
-            Some(m) if k >= m => Some(if k == 0 { " FIRST".to_string() } else { format!(" AFTER {}", q(&d.cols.items[k - 1].1.name)) }),
-            _ => None,
-        };
+        let pos = d.needs_pos[k].then(|| if k == 0 { " FIRST".to_string() } else { format!(" AFTER {}", q(&d.cols.items[k - 1].1.name)) });
         let pos_s = pos.clone().unwrap_or_default();
         match a {
             None => clauses.push(format!("ADD COLUMN {}{pos_s}", my_col_def(b))),
@@ -660,7 +746,7 @@ fn my_plan(t: &str, schema: Option<&str>, orig: &TableStructure, draft: &TableSt
         clauses.push(format!("ADD PRIMARY KEY ({})", col_list(MY, &draft.primary_key)));
     }
     for ix in &d.idx_add {
-        clauses.push(format!("ADD {}INDEX {} ({})", if ix.unique { "UNIQUE " } else { "" }, q(&ix.name), col_list(MY, &ix.columns)));
+        clauses.push(format!("ADD {}", index_def(MY, ix)));
     }
     for c in &d.ck_add {
         clauses.push(format!("ADD {}", check_clause(MY, c)));
@@ -842,14 +928,9 @@ fn lite_col_def(c: &ColumnDef, inline_pk: bool) -> String {
     s
 }
 
-fn lite_create_index(t: &str, ix: &IndexDef) -> String {
-    let q = |s: &str| quote_ident(Driver::Sqlite, s);
-    format!("CREATE {}INDEX {} ON {t} ({})", if ix.unique { "UNIQUE " } else { "" }, q(&ix.name), col_list(Driver::Sqlite, &ix.columns))
-}
 
 /// CREATE TABLE 본문 (컬럼·기본키·UNIQUE·CHECK·외래 키)
 fn lite_table_body(draft: &TableStructure) -> AppResult<String> {
-    let q = |s: &str| quote_ident(Driver::Sqlite, s);
     let pk = &draft.primary_key;
     let autos: Vec<&ColumnDef> = draft.columns.iter().filter(|c| c.auto_increment).collect();
     if let Some(a) = autos.first() {
@@ -860,7 +941,7 @@ fn lite_table_body(draft: &TableStructure) -> AppResult<String> {
     let inline_pk = autos.first().map(|a| a.name.clone());
     let mut lines: Vec<String> = draft.columns.iter().map(|c| lite_col_def(c, inline_pk.as_deref() == Some(&c.name))).collect();
     if !pk.is_empty() && inline_pk.is_none() {
-        lines.push(format!("PRIMARY KEY ({})", pk.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ")));
+        lines.push(format!("PRIMARY KEY ({})", col_list(Driver::Sqlite, pk)));
     }
     for ix in draft.indexes.iter().filter(|ix| ix.constraint) {
         lines.push(format!("UNIQUE ({})", col_list(Driver::Sqlite, &ix.columns)));
@@ -902,7 +983,10 @@ fn lite_plan(table: &str, draft: &TableStructure, d: &Diff, aux: &LiteAux) -> Ap
             }
         }
         for ix in &d.idx_add {
-            p.push(lite_create_index(&t, ix), false);
+            p.push(create_index(Driver::Sqlite, &t, ix), false);
+        }
+        if d.cols.drops.len() > 1 {
+            p.notes.push("SQLite의 DROP COLUMN은 컬럼마다 테이블 전체를 다시 씁니다. 큰 테이블이면 시간이 걸립니다.".into());
         }
         return Ok(p);
     }
@@ -914,7 +998,9 @@ fn lite_plan(table: &str, draft: &TableStructure, d: &Diff, aux: &LiteAux) -> Ap
             "이 테이블에는 구조 탭이 아직 다루지 않는 정의({w})가 있어 다시 만들 수 없습니다. SQL로 직접 바꿔 주세요."
         )));
     }
+    p.rebuild = true;
     p.notes.push("SQLite는 이 변경을 ALTER로 할 수 없어 테이블을 새로 만들고 데이터를 옮깁니다.".into());
+    p.warnings.push("테이블을 새로 만들어 데이터를 옮긴 뒤 원래 테이블을 삭제합니다(DROP TABLE). 실패하면 모두 롤백됩니다.".into());
     if !d.renamed.is_empty() && !draft.checks.is_empty() {
         p.notes.push("CHECK 식은 적은 그대로 씁니다. 이름을 바꾼 컬럼을 쓰는 식은 함께 고쳐 주세요.".into());
     }
@@ -929,6 +1015,12 @@ fn lite_plan(table: &str, draft: &TableStructure, d: &Diff, aux: &LiteAux) -> Ap
     }
     p.push(format!("DROP TABLE {t}"), true);
     p.push(format!("ALTER TABLE {tmp} RENAME TO {t}"), false);
+    // AUTOINCREMENT 카운터: 원래 테이블의 sqlite_sequence 행은 DROP과 함께 사라지므로 지운 최대 ID도 다시 쓰지 않게 옮긴다
+    if let Some(seq) = aux.seq.filter(|_| draft.columns.iter().any(|c| c.auto_increment)) {
+        let name = literal(Driver::Sqlite, Some(table));
+        p.push(format!("INSERT INTO sqlite_sequence (name, seq) SELECT {name}, 0 WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = {name})"), false);
+        p.push(format!("UPDATE sqlite_sequence SET seq = max(seq, {seq}) WHERE name = {name}"), false);
+    }
 
     for ix in draft.indexes.iter().filter(|ix| !ix.constraint) {
         match &ix.raw {
@@ -938,7 +1030,7 @@ fn lite_plan(table: &str, draft: &TableStructure, d: &Diff, aux: &LiteAux) -> Ap
                 }
                 p.push(sql.clone(), false);
             }
-            None => p.push(lite_create_index(&t, ix), false),
+            None => p.push(create_index(Driver::Sqlite, &t, ix), false),
         }
     }
     if !aux.triggers.is_empty() && (!d.renamed.is_empty() || !d.cols.drops.is_empty()) {
@@ -952,6 +1044,9 @@ fn lite_plan(table: &str, draft: &TableStructure, d: &Diff, aux: &LiteAux) -> Ap
 
 // ---------------------------------------------------------------- 실행
 
+/// DDL이 테이블 잠금을 기다리는 최대 시간(초)
+const LOCK_WAIT_SECS: u32 = 10;
+
 fn failed(e: impl std::fmt::Display, i: usize, tail: &str) -> AppError {
     AppError::Submit { message: format!("{e}\n{tail}"), change_index: i, affected: 0 }
 }
@@ -960,17 +1055,27 @@ fn failed(e: impl std::fmt::Display, i: usize, tail: &str) -> AppError {
 async fn run_in_tx(conn: &mut AnyConn<'_>, stmts: &[String], fk_check: bool) -> AppResult<()> {
     conn.execute_raw("BEGIN").await?;
     let mut body = Ok(());
+    if let AnyConn::Pg(_) = conn {
+        // 다른 세션(콘솔의 Manual 트랜잭션 등)이 테이블을 잡고 있으면 무한정 기다리지 않는다.
+        // PG는 대기 중인 ALTER 뒤로 그 테이블의 모든 쿼리가 줄을 서므로 짧게 둔다.
+        if let Err(e) = conn.execute_raw(&format!("SET LOCAL lock_timeout = '{LOCK_WAIT_SECS}s'")).await {
+            body = Err(e);
+        }
+    }
     for (i, s) in stmts.iter().enumerate() {
+        if body.is_err() {
+            break;
+        }
         if let Err(e) = conn.execute_raw(s).await {
             body = Err(failed(e, i, "모든 변경을 롤백했습니다."));
-            break;
         }
     }
     if body.is_ok() && fk_check {
         if let AnyConn::Lite(c) = conn {
-            match sqlx::query("PRAGMA foreign_key_check").fetch_all(&mut **c).await {
-                Ok(rows) if !rows.is_empty() => body = Err(AppError::user(format!("외래 키가 어긋나는 행이 {}개 있어 모든 변경을 롤백했습니다.", rows.len()))),
-                Ok(_) => {}
+            // 첫 위반 행만 확인한다
+            match sqlx::query("PRAGMA foreign_key_check").fetch_optional(&mut **c).await {
+                Ok(Some(_)) => body = Err(AppError::user("외래 키가 어긋나는 행이 있어 모든 변경을 롤백했습니다.")),
+                Ok(None) => {}
                 Err(e) => body = Err(e.into()),
             }
         }
@@ -1006,17 +1111,28 @@ pub async fn apply(conn: &mut AnyConn<'_>, stmts: &[String]) -> AppResult<()> {
     }
     match conn {
         AnyConn::My(_) => {
+            // 메타데이터 잠금 대기의 기본 상한은 1년이다. 이 연결에서만 짧게 두고 되돌린다
+            let prev: u64 = match conn {
+                AnyConn::My(c) => sqlx::query_scalar("SELECT @@SESSION.lock_wait_timeout").fetch_one(&mut **c).await?,
+                _ => unreachable!(),
+            };
+            conn.execute_raw(&format!("SET SESSION lock_wait_timeout = {LOCK_WAIT_SECS}")).await?;
+            let mut r = Ok(());
             for (i, s) in stmts.iter().enumerate() {
                 if let Err(e) = conn.execute_raw(s).await {
                     let tail = if i == 0 { "반영된 문장은 없습니다.".to_string() } else { format!("앞의 {i}개 문장은 이미 반영되었습니다 (MySQL DDL은 되돌릴 수 없습니다).") };
-                    return Err(failed(e, i, &tail));
+                    r = Err(failed(e, i, &tail));
+                    break;
                 }
             }
-            Ok(())
+            let _ = conn.execute_raw(&format!("SET SESSION lock_wait_timeout = {prev}")).await;
+            r
         }
         AnyConn::Pg(_) => run_in_tx(conn, stmts, false).await,
         // 재생성이 아니면 그대로 실행한다. 테이블·컬럼 이름 변경이 트리거·뷰·다른 테이블의 외래 키까지 고치도록
         // legacy_alter_table은 끈 채로 둔다.
+        // 재생성 여부는 임시 테이블 이름으로 판단한다 (미리보기에서 고친 SQL도 받으므로 계획의 플래그를 쓸 수 없다.
+        // 사용자가 임시 이름까지 고치면 외래 키가 켜진 채 실행된다 — REVIEW.md 보류 항목)
         AnyConn::Lite(_) if !stmts.iter().any(|s| s.contains(REBUILD_PREFIX)) => run_in_tx(conn, stmts, false).await,
         AnyConn::Lite(_) => {
             // 재생성 중 DROP TABLE이 외래 키 동작을 일으키지 않게 끄고(트랜잭션 밖에서만 바꿀 수 있다),

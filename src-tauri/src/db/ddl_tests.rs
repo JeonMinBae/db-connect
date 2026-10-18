@@ -61,8 +61,11 @@ fn pg_columns() {
         ]
     );
     assert!(p.statements[0].destructive && p.statements[4].destructive && !p.statements[3].destructive);
-    assert_eq!(p.warnings.len(), 2);
-    assert!(p.warnings[0].contains("old") && p.warnings[1].contains("text → varchar(100)"));
+    assert_eq!(p.warnings.len(), 4, "{:?}", p.warnings);
+    assert!(p.warnings[0].contains("old"));
+    assert!(p.warnings[1].contains("id NOT NULL"));
+    assert!(p.warnings[2].contains("text → varchar(100)"));
+    assert!(p.warnings[3].contains("full name NOT NULL"));
     let mut moved = a.clone();
     moved.columns.swap(0, 1);
     assert!(plan_alter(Driver::Postgres, Some("public"), "t", &a, &moved, None).is_err());
@@ -132,15 +135,25 @@ fn mysql_one_statement() {
     let p = plan_alter(Driver::Mysql, Some("db"), "t", &a, &b, None).unwrap();
     assert_eq!(
         sqls(&p),
-        ["ALTER TABLE `db`.`t`\n  DROP COLUMN `gone`,\n  ADD COLUMN `x``y` int NULL AFTER `id`,\n  CHANGE COLUMN `name` `nm` varchar(50) CHARACTER SET latin1 COLLATE latin1_swedish_ci NULL COMMENT 'a\\\\b' AFTER `x``y`,\n  MODIFY COLUMN `ts` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `nm`"]
+        // 새 컬럼만 끼워 넣으면 그 컬럼에만 위치 절을 붙인다 (뒤 컬럼은 순서가 그대로라 다시 쓰지 않는다)
+        ["ALTER TABLE `db`.`t`\n  DROP COLUMN `gone`,\n  ADD COLUMN `x``y` int NULL AFTER `id`,\n  CHANGE COLUMN `name` `nm` varchar(50) CHARACTER SET latin1 COLLATE latin1_swedish_ci NULL COMMENT 'a\\\\b',\n  MODIFY COLUMN `ts` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"]
     );
     assert!(p.statements[0].destructive);
+    // 맞바꾸면 한 컬럼만 옮긴다
     let mut first = a.clone();
     first.columns.swap(0, 1);
-    assert_eq!(
-        sqls(&plan_alter(Driver::Mysql, Some("db"), "t", &a, &first, None).unwrap())[0].lines().nth(1).unwrap().trim(),
-        "MODIFY COLUMN `name` varchar(50) CHARACTER SET latin1 COLLATE latin1_swedish_ci NULL COMMENT 'a\\\\b' FIRST,"
-    );
+    assert_eq!(sqls(&plan_alter(Driver::Mysql, Some("db"), "t", &a, &first, None).unwrap()), ["ALTER TABLE `db`.`t`\n  MODIFY COLUMN `id` int NULL AFTER `name`"]);
+    // 맨 앞에 새 컬럼: 뒤에 생성 컬럼이 있어도 ADD … FIRST 하나로 끝난다
+    let mut g = a.clone();
+    g.columns[3].generated = true;
+    let mut gb = g.clone();
+    gb.columns.insert(0, new_col("z", "int"));
+    assert_eq!(sqls(&plan_alter(Driver::Mysql, None, "t", &g, &gb, None).unwrap()), ["ALTER TABLE `t`\n  ADD COLUMN `z` int NULL FIRST"]);
+    // 끝에서 둘째를 맨 앞으로: 그 컬럼 하나만 옮긴다
+    let mut mv = a.clone();
+    let ts = mv.columns.remove(2);
+    mv.columns.insert(0, ts);
+    assert_eq!(sqls(&plan_alter(Driver::Mysql, None, "t", &a, &mv, None).unwrap())[0].matches("MODIFY").count(), 1);
     let mut num = a.clone();
     num.columns[1].full_type = "int".into();
     assert!(sqls(&plan_alter(Driver::Mysql, None, "t", &a, &num, None).unwrap())[0].contains("MODIFY COLUMN `name` int NULL COMMENT"));
@@ -497,4 +510,56 @@ fn table_options() {
     n.options = TableOptions { engine: Some("InnoDB".into()), charset: Some("utf8mb4".into()), comment: Some("c".into()), ..Default::default() };
     assert_eq!(sqls(&plan_create(Driver::Mysql, None, "n", &n).unwrap()), ["CREATE TABLE `n` (\n  `id` int NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='c'"]);
     assert_eq!(sqls(&plan_create(Driver::Postgres, Some("s"), "n", &n).unwrap())[1], r#"COMMENT ON TABLE "s"."n" IS 'c'"#);
+}
+
+#[test]
+fn drop_and_readd_same_name_recreates_constraints() {
+    let mut a = st(vec![col("id", "int"), col("a", "int")], &["id"]);
+    a.primary_key_name = Some("t_pkey".into());
+    a.indexes = vec![idx("ix_a", &["a"], false)];
+    // id·a를 지우고 같은 이름으로 다시 추가 (초안의 기본키·인덱스는 같은 이름을 가리킨다)
+    let b = TableStructure { columns: vec![new_col("id", "bigint"), new_col("a", "text")], ..a.clone() };
+    let p = plan_alter(Driver::Postgres, Some("s"), "t", &a, &b, None).unwrap();
+    let s = sqls(&p);
+    assert!(s.contains(&r#"ALTER TABLE "s"."t" DROP CONSTRAINT "t_pkey""#), "{s:?}");
+    assert!(s.contains(&r#"ALTER TABLE "s"."t" ADD PRIMARY KEY ("id")"#), "{s:?}");
+    assert!(s.contains(&r#"CREATE INDEX "ix_a" ON "s"."t" ("a")"#), "{s:?}");
+}
+
+#[test]
+fn positions() {
+    // (원래 위치 | 새 컬럼)
+    assert_eq!(positions_needed(&[Some(0), Some(1), Some(2)]), [false, false, false]);
+    assert_eq!(positions_needed(&[Some(0), Some(1), None]), [false, false, false]);
+    assert_eq!(positions_needed(&[None, Some(0), Some(1)]), [true, false, false]);
+    assert_eq!(positions_needed(&[Some(2), Some(0), Some(1)]), [true, false, false]);
+    assert_eq!(positions_needed(&[Some(1), Some(0), None, Some(2)]).iter().filter(|x| **x).count(), 2);
+}
+
+#[tokio::test]
+async fn sqlite_rebuild_with_rename_updates_references() {
+    let mut c = db("CREATE TABLE parent (id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+         INSERT INTO parent (v) VALUES ('a'), ('b'), ('c'); DELETE FROM parent WHERE id = 3;
+         CREATE TABLE child (pid INTEGER REFERENCES parent(id));
+         CREATE VIEW pv AS SELECT id FROM parent;")
+    .await;
+    let a = load_sqlite(&mut c, "parent").await.unwrap();
+    let aux = load_sqlite_aux(&mut c, "parent").await.unwrap();
+    assert_eq!(aux.seq, Some(3));
+    let mut b = a.clone();
+    b.columns[1].nullable = false;
+    let mut p = plan_alter(Driver::Sqlite, None, "parent", &a, &b, Some(&aux)).unwrap();
+    assert!(p.rebuild);
+    append_rename(&mut p, Driver::Sqlite, None, "parent", "p2").unwrap();
+    let stmts: Vec<String> = p.statements.iter().map(|s| s.sql.clone()).collect();
+    apply(&mut AnyConn::Lite(&mut c), &stmts).await.unwrap();
+    let parent: String = sqlx::query_scalar(r#"SELECT "table" FROM pragma_foreign_key_list('child')"#).fetch_one(&mut c).await.unwrap();
+    assert_eq!(parent, "p2", "다른 테이블의 외래 키가 새 이름을 가리켜야 한다");
+    assert_eq!(rows(&mut c, "SELECT CAST(count(*) AS TEXT) FROM pv").await, [("2".to_string(),)]);
+    // 지운 ID 3을 다시 쓰지 않는다
+    sqlx::raw_sql("INSERT INTO p2 (v) VALUES ('d')").execute(&mut c).await.unwrap();
+    let max: i64 = sqlx::query_scalar("SELECT max(id) FROM p2").fetch_one(&mut c).await.unwrap();
+    assert_eq!(max, 4);
+    let legacy: i64 = sqlx::query_scalar("PRAGMA legacy_alter_table").fetch_one(&mut c).await.unwrap();
+    assert_eq!(legacy, 0);
 }

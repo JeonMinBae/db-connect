@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ColumnDef, TableStructure } from "../api/types";
-import { changeCount, changedFields, charsetChanged, optionsChanged, draftChangeCount, draftOf, entryState, moveRow, newEntry, newRow, orderChanged, parseList, removeEntry, renameColumnRefs, revertEntry, revertRow, rowState, rowsOf, toDraft, toStructure } from "./draft";
+import { isTextual, newTableDraft, renameColumnFor, revertColumn, changeCount, changedFields, charsetChanged, optionsChanged, draftChangeCount, draftOf, entryState, moveRow, newEntry, newRow, orderChanged, parseList, removeEntry, renameColumnRefs, revertEntry, revertRow, rowState, rowsOf, toDraft, toStructure } from "./draft";
 
 const col = (name: string, full_type = "int"): ColumnDef => ({
   orig_name: name,
@@ -131,5 +131,47 @@ describe("table options draft", () => {
     expect(charsetChanged(s, d)).toBe(true);
     expect(draftChangeCount(s, d)).toBe(1);
     expect(toStructure(s, d).options.charset).toBe("utf8mb4");
+  });
+});
+
+describe("review fixes", () => {
+  const t: TableStructure = {
+    ...s,
+    indexes: [{ orig_name: "ix", name: "ix", columns: ["name"], unique: false, constraint: false, raw: null }],
+  };
+
+  it("다른 컬럼과 이름이 겹치면 참조를 옮기지 않는다 (id → idx를 입력하는 중간의 'id')", () => {
+    const d = draftOf(t);
+    const n = newRow();
+    d.columns.push(n);
+    // 새 컬럼 이름을 "" → "idx"로 마치면 참조 변화 없음
+    expect(renameColumnFor(d, n.key, "", "idx").pk).toEqual(["id"]);
+    // 기존 컬럼 이름이 다른 컬럼과 같아지면 건너뜀
+    const dup = { ...d, columns: d.columns.map((r) => (r.key === n.key ? { ...r, col: { ...r.col, name: "id" } } : r)) };
+    expect(renameColumnFor(dup, d.columns[0].key, "id", "uid").pk).toEqual(["id"]);
+    // 정상 이름 변경은 반영
+    expect(renameColumnFor(d, d.columns[1].key, "name", "nm").indexes[0].def.columns).toEqual(["nm"]);
+  });
+
+  it("행 되돌리기는 참조 이름도 원래대로", () => {
+    let d = draftOf(t);
+    const key = d.columns[0].key;
+    d = { ...d, columns: d.columns.map((r) => (r.key === key ? { ...r, col: { ...r.col, name: "uid" } } : r)) };
+    d = renameColumnFor(d, key, "id", "uid");
+    expect(d.pk).toEqual(["uid"]);
+    d = revertColumn(t, d, key);
+    expect(d.pk).toEqual(["id"]);
+    expect(d.columns[0].col.name).toBe("id");
+  });
+
+  it("문자열 타입 판정, 새 테이블 초안", () => {
+    expect(isTextual("varchar(10)")).toBe(true);
+    expect(isTextual(" ENUM('a')")).toBe(true);
+    expect(isTextual("int")).toBe(false);
+    expect(isTextual("textual_type")).toBe(false);
+    const n = newTableDraft("sqlite");
+    expect(n.columns[0].col).toMatchObject({ name: "id", full_type: "INTEGER", auto_increment: true, nullable: false });
+    expect(n.pk).toEqual(["id"]);
+    expect(newTableDraft("postgres").columns[0].col.full_type).toBe("bigint");
   });
 });
