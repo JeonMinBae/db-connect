@@ -1438,7 +1438,7 @@ StructureTab.onApply
 
 ---
 
-### S2. 인덱스 · 제약 (PK / UNIQUE / FK / CHECK)
+### S2. 인덱스 · 제약 (PK / UNIQUE / FK / CHECK) ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: 바뀐 인덱스·제약은 지우고 다시 만든다. 컬럼 이름을 바꾸면 프론트가 기본키·인덱스·외래 키의 컬럼 목록을 함께 바꾸고, 백엔드는 원래 목록을 새 이름으로 옮겨 비교한다. 삭제한 컬럼을 쓰는 항목이 남아 있으면 거부. 식·부분 인덱스는 보존·삭제만. MySQL은 같은 이름의 외래 키를 다시 만들 때만 DROP FOREIGN KEY를 앞 문장으로 나눈다. SQLite CHECK는 CREATE 문을 파싱한다)
 
 **작업 내용**
 - `table_structure`에 `indexes`, `foreign_keys`, `checks`를 채운다.

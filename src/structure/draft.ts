@@ -1,4 +1,4 @@
-import type { ColumnDef, Driver, TableStructure } from "../api/types";
+import type { CheckDef, ColumnDef, Driver, FkAction, ForeignKeyDef, IndexDef, TableStructure } from "../api/types";
 
 /** 구조 탭의 컬럼 행. 삭제한 원래 컬럼도 되돌릴 수 있게 목록에 남긴다. */
 export interface Row {
@@ -51,9 +51,10 @@ export function orderChanged(s: TableStructure, rows: Row[]): boolean {
 export const changeCount = (s: TableStructure, rows: Row[]) => rows.filter((r) => rowState(s, r) !== "same").length + (orderChanged(s, rows) ? 1 : 0);
 
 /** 서버로 보낼 초안 */
+/** 컬럼만 바꾼 초안 (나머지는 원래 구조 그대로) */
 export const toDraft = (s: TableStructure, rows: Row[]): TableStructure => ({
+  ...s,
   columns: rows.filter((r) => !r.deleted).map((r) => ({ ...r.col, default: r.col.default?.trim() ? r.col.default : null })),
-  primary_key: s.primary_key,
 });
 
 /** 행 되돌리기: 새 행은 지우고, 원래 행은 원래 정의로 (위치는 그대로) */
@@ -83,3 +84,97 @@ export const TYPE_SUGGESTIONS: Record<Driver, string[]> = {
   mysql: ["int", "bigint", "tinyint", "smallint", "tinyint(1)", "decimal(10,2)", "float", "double", "varchar(255)", "char(10)", "text", "mediumtext", "longtext", "date", "datetime", "timestamp", "time", "year", "json", "blob", "longblob", "enum('a','b')"],
   sqlite: ["INTEGER", "TEXT", "REAL", "BLOB", "NUMERIC"],
 };
+
+// ---------------------------------------------------------------- 인덱스·제약 (S2)
+
+/** 인덱스·외래 키·CHECK 한 줄. 삭제한 원래 항목도 되돌릴 수 있게 남긴다. */
+export interface Entry<T> {
+  key: string;
+  def: T;
+  deleted: boolean;
+}
+
+type Keyed = { orig_name: string | null };
+
+/** 구조 탭 전체 초안 */
+export interface Draft {
+  columns: Row[];
+  pk: string[];
+  indexes: Entry<IndexDef>[];
+  fks: Entry<ForeignKeyDef>[];
+  checks: Entry<CheckDef>[];
+}
+
+export const entriesOf = <T extends Keyed>(list: T[]): Entry<T>[] => list.map((d) => ({ key: "o:" + d.orig_name, def: structuredClone(d), deleted: false }));
+
+export const newEntry = <T>(def: T): Entry<T> => ({ key: "n:" + crypto.randomUUID(), def, deleted: false });
+
+export const draftOf = (s: TableStructure): Draft => ({
+  columns: rowsOf(s),
+  pk: [...s.primary_key],
+  indexes: entriesOf(s.indexes),
+  fks: entriesOf(s.foreign_keys),
+  checks: entriesOf(s.checks),
+});
+
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+export function entryState<T extends Keyed>(orig: T[], e: Entry<T>): RowState {
+  if (e.def.orig_name === null) return "added";
+  if (e.deleted) return "deleted";
+  const o = orig.find((x) => x.orig_name === e.def.orig_name);
+  return o && sameJson(o, e.def) ? "same" : "modified";
+}
+
+export function revertEntry<T extends Keyed>(orig: T[], list: Entry<T>[], key: string): Entry<T>[] {
+  return list.flatMap((e) => {
+    if (e.key !== key) return [e];
+    const o = orig.find((x) => x.orig_name === e.def.orig_name);
+    return o ? [{ ...e, def: structuredClone(o), deleted: false }] : [];
+  });
+}
+
+/** 새 항목은 지우고, 원래 항목은 삭제 표시 */
+export const removeEntry = <T extends Keyed>(list: Entry<T>[], key: string): Entry<T>[] =>
+  list.flatMap((e) => (e.key !== key ? [e] : e.def.orig_name === null ? [] : [{ ...e, deleted: true }]));
+
+export const pkChanged = (s: TableStructure, d: Draft) => !sameJson(s.primary_key, d.pk);
+
+export function draftChangeCount(s: TableStructure, d: Draft): number {
+  const n = <T extends Keyed>(orig: T[], list: Entry<T>[]) => list.filter((e) => entryState(orig, e) !== "same").length;
+  return changeCount(s, d.columns) + (pkChanged(s, d) ? 1 : 0) + n(s.indexes, d.indexes) + n(s.foreign_keys, d.fks) + n(s.checks, d.checks);
+}
+
+const live = <T>(list: Entry<T>[]) => list.filter((e) => !e.deleted).map((e) => e.def);
+
+/** 서버로 보낼 초안 구조 */
+export const toStructure = (s: TableStructure, d: Draft): TableStructure => ({
+  ...toDraft(s, d.columns),
+  primary_key: d.pk,
+  primary_key_name: s.primary_key_name,
+  indexes: live(d.indexes),
+  foreign_keys: live(d.fks),
+  checks: live(d.checks),
+  checks_unsupported: s.checks_unsupported,
+});
+
+/** 컬럼 이름을 바꾸면 기본키·인덱스·외래 키의 컬럼 목록도 따라 바꾼다 (식 인덱스·CHECK 식은 그대로) */
+export function renameColumnRefs(d: Draft, from: string, to: string): Draft {
+  if (from === to || !from) return d;
+  const swap = (cols: string[]) => (cols.includes(from) ? cols.map((c) => (c === from ? to : c)) : cols);
+  return {
+    ...d,
+    pk: swap(d.pk),
+    indexes: d.indexes.map((e) => (e.def.raw || !e.def.columns.includes(from) ? e : { ...e, def: { ...e.def, columns: swap(e.def.columns) } })),
+    fks: d.fks.map((e) => (e.def.columns.includes(from) ? { ...e, def: { ...e.def, columns: swap(e.def.columns) } } : e)),
+  };
+}
+
+/** "a, b" ↔ ["a", "b"] */
+export const parseList = (s: string) =>
+  s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+export const FK_ACTIONS: FkAction[] = ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"];

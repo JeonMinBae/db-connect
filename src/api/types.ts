@@ -106,9 +106,50 @@ export interface ColumnDef {
   on_update: string | null;
 }
 
+export interface IndexDef {
+  orig_name: string | null;
+  name: string;
+  columns: string[];
+  unique: boolean;
+  /** UNIQUE 제약으로 만든 것 */
+  constraint: boolean;
+  /** 식·부분 인덱스의 원래 정의: 그대로 두거나 삭제만 한다 */
+  raw: string | null;
+}
+
+export type FkAction = "NO ACTION" | "RESTRICT" | "CASCADE" | "SET NULL" | "SET DEFAULT";
+
+export interface ForeignKeyDef {
+  /** 이름 없는 SQLite 외래 키는 "#순번" */
+  orig_name: string | null;
+  /** 비어 있으면 DB가 정한다 */
+  name: string;
+  columns: string[];
+  /** null = 같은 스키마 */
+  ref_schema: string | null;
+  ref_table: string;
+  /** SQLite는 비어 있으면 참조 테이블의 기본키 */
+  ref_columns: string[];
+  on_update: FkAction;
+  on_delete: FkAction;
+}
+
+export interface CheckDef {
+  orig_name: string | null;
+  name: string;
+  /** 바깥 괄호를 뺀 식 */
+  expr: string;
+}
+
 export interface TableStructure {
   columns: ColumnDef[];
   primary_key: string[];
+  primary_key_name: string | null;
+  indexes: IndexDef[];
+  foreign_keys: ForeignKeyDef[];
+  checks: CheckDef[];
+  /** CHECK 제약을 조회할 수 없는 서버 (오래된 MySQL/MariaDB) */
+  checks_unsupported: boolean;
 }
 
 export interface DdlPlan {
