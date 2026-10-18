@@ -5,6 +5,7 @@ import { useRunner } from "../grid/useRunner";
 import { qualified } from "../sql/quote";
 import { useConnections } from "../store/connections";
 import { useTabs } from "../store/tabs";
+import { nodeKey, useTree } from "../store/tree";
 import { confirmDialog } from "../store/ui";
 import type { Scheme } from "../theme";
 import { ResultBody } from "./ResultPanel";
@@ -44,6 +45,15 @@ export const TableViewTab = memo(function TableViewTab(props: { tabId: string; c
       void apply("", "");
     }
   }, [props.active]);
+
+  // 구조 탭에서 구조를 바꾸면 다시 조회한다 (정렬은 없어진 컬럼을 가리킬 수 있어 지운다)
+  const version = useTree((s) => s.versions[nodeKey(cfg.id, schema, table)]);
+  useEffect(() => {
+    if (!version || !loaded) return;
+    orderRef.current?.setText("");
+    setSort([]);
+    void apply(undefined, "");
+  }, [version]);
 
   const onHeaderClicked = (col: number, shift: boolean) => {
     const r = entry?.result;

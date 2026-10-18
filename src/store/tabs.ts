@@ -5,6 +5,7 @@ import { confirmDialog } from "./ui";
 export type Tab =
   | { kind: "console"; id: string; connId: string; title: string }
   | { kind: "table"; id: string; connId: string; schema: string; table: string; title: string }
+  | { kind: "structure"; id: string; connId: string; schema: string; table: string; title: string }
   /** key: 텍스트 키 이름, 바이너리 키는 redis-cli 이스케이프 표기 (binary: true) */
   | { kind: "redisKey"; id: string; connId: string; db: number; key: string; binary?: boolean; title: string }
   | { kind: "mongoColl"; id: string; connId: string; db: string; coll: string; title: string };
@@ -22,6 +23,7 @@ interface TabsState {
   activate: (id: string) => void;
   openConsole: (connId: string, connName: string, forceNew?: boolean) => void;
   openTable: (connId: string, schema: string, table: string) => void;
+  openStructure: (connId: string, schema: string, table: string) => void;
   openRedisKey: (connId: string, db: number, key: string, binary?: boolean) => void;
   openMongoColl: (connId: string, db: string, coll: string) => void;
   renameRedisKey: (connId: string, db: number, key: string, newKey: string | null) => void;
@@ -96,6 +98,14 @@ export const useTabs = create<TabsState>((set, get) => {
       const existing = get().tabs.find((t) => t.kind === "table" && t.connId === connId && t.schema === schema && t.table === table);
       if (existing) return get().activate(existing.id);
       const tab: Tab = { kind: "table", id: newId(), connId, schema, table, title: table };
+      set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+      persist(get());
+    },
+
+    openStructure: (connId, schema, table) => {
+      const existing = get().tabs.find((t) => t.kind === "structure" && t.connId === connId && t.schema === schema && t.table === table);
+      if (existing) return get().activate(existing.id);
+      const tab: Tab = { kind: "structure", id: newId(), connId, schema, table, title: `${table} 구조` };
       set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
       persist(get());
     },

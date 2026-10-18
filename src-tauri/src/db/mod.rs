@@ -1,9 +1,11 @@
 pub mod cancel;
+pub mod ddl;
 pub mod edit;
 pub mod exec;
 pub mod export;
 pub mod meta;
 pub mod pool;
+pub mod structure;
 pub mod value;
 pub mod mongo;
 pub mod redis;

@@ -1342,3 +1342,181 @@ parseShellValue(`{ _id: ObjectId("65f0a1b2c3d4e5f601234567"), at: { $gt: ISODate
 
 **완료 조건**
 - 설치 파일 15MB 이하, 유휴 메모리 150MB 이하, 콜드 스타트 1.5초 이하 유지.
+
+---
+
+## M5 — 스키마 편집 (설계: DESIGN.md "스키마 편집")
+
+순서: S1 → S2 → S3 → S4. 각 단계에서 PG · MySQL · SQLite를 모두 마친다. SQLite는 인메모리 실행 테스트로, PG/MySQL은 생성 SQL 스냅샷 테스트로 완료를 판단한다. 실제 서버 검증은 Docker 준비 후 하며, 그때까지는 "서버 검증은 Docker 준비 후"로 표시한다.
+
+### S1. 구조 메타 확장 · 구조 탭 · 컬럼 편집 ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후 · 실제 앱에서 SQLite로 화면·적용·데이터 탭 갱신 확인. 구현 메모: 미리보기는 SubmitPreview와 같은 방식의 별도 `DdlPreview`, `preview_ddl`은 안내(notes)를 함께 돌려주고 DB의 현재 구조와 `original`이 다르면 거부, `apply_ddl`은 문장 문자열 목록을 받음. "새 테이블" 메뉴는 S3, 제약·옵션 섹션은 S2·S4에서 추가. SQLite 재생성은 CHECK·COLLATE·ON CONFLICT·생성 컬럼·DEFERRABLE이 있는 테이블은 거부)
+
+**작업 내용**
+- 메타 확장 커맨드 `table_structure(conn_id, schema, table) -> TableStructure`. 기존 `list_columns`는 그대로 둔다.
+  - `TableStructure { columns: Vec<ColumnDef>, indexes, foreign_keys, checks, options }`. S1에서는 `columns`만 채운다.
+  - `ColumnDef { name, full_type, nullable, default: Option<String>, auto_increment, comment, charset, collation, ordinal }`
+  - PG
+    - 기본값: `pg_get_expr(adbin, adrelid)`
+    - IDENTITY: `attidentity`, `serial`(nextval 기본값)도 자동 증가로 본다.
+    - 코멘트: `col_description`
+    - COLLATE: `attcollation`
+  - MySQL: `information_schema.COLUMNS`의 `COLUMN_DEFAULT`, `EXTRA`, `COLUMN_COMMENT`, `CHARACTER_SET_NAME`, `COLLATION_NAME`
+  - SQLite
+    - `pragma_table_xinfo`의 `dflt_value`
+    - `AUTOINCREMENT` 여부: `sqlite_master.sql`을 보고 판단한다.
+- 프론트
+  - 트리 메뉴: 테이블에 "구조 편집"(뷰는 비활성), 스키마에 "새 테이블"(S3에서 활성).
+  - 탭 종류 `tableStructure`. 섹션은 컬럼 / 인덱스 / 제약 / 옵션이며, S1에서는 컬럼만 편집할 수 있고 나머지는 보기만 한다.
+  - 상태: `{ original: TableStructure, draft: TableStructure }`. 컬럼의 이름 변경과 수정을 구분하려고 컬럼마다 안정 키 `origName`을 둔다.
+  - 행 색 표시(추가/수정/삭제), 행별 되돌리기, 전체 취소. 타입 입력은 `<input list>` + DB별 타입 목록 상수.
+  - MySQL만: 컬럼 순서 위/아래 이동.
+- 백엔드 `db/ddl.rs`
+  - `plan_alter(driver, original, draft) -> Vec<RawStmt>`
+  - PG
+    - `ADD/DROP/RENAME COLUMN`
+    - `ALTER COLUMN … TYPE … USING col::type`
+    - `SET/DROP NOT NULL`, `SET/DROP DEFAULT`
+    - `ADD/DROP IDENTITY`
+  - MySQL
+    - 한 테이블의 모든 변경을 `ALTER TABLE t` 한 문장에 묶는다.
+    - 절: `ADD COLUMN`, `DROP COLUMN`, `RENAME COLUMN`(MySQL 8 / MariaDB 10.5+), 그 이하는 `CHANGE COLUMN`, `MODIFY COLUMN … [FIRST|AFTER x]`
+    - `MODIFY`는 컬럼 전체 정의를 다시 쓰므로 코멘트·문자셋·기본값을 보존한다.
+  - SQLite
+    - `ADD COLUMN`, `RENAME COLUMN`, `DROP COLUMN`(3.35+)은 바로 쓴다.
+    - 그 밖의 변경은 `rebuild_table(original, draft)` 12단계 SQL로 만든다. 인덱스·트리거 원문은 `sqlite_master`에서 가져온다.
+  - 각 `RawStmt`에 `destructive: bool` 플래그를 추가한다(DROP, 타입 변경, 재생성). `expect_one`은 false.
+- 커맨드
+  - `preview_ddl(conn_id, schema, table, original, draft) -> Vec<RawStmt>`
+  - `apply_ddl(conn_id, schema, table, statements) -> DdlResult { applied: usize, error: Option<..> }`
+    - 실행 연결: 콘솔과 무관한 풀 연결 하나를 사용한다.
+    - PG/SQLite: `BEGIN … COMMIT`
+    - MySQL: 문장을 차례로 실행하고, 실패하면 `applied` 수와 오류를 반환한다.
+    - 읽기 전용 접속은 거부한다.
+- `SubmitPreview` 재사용
+  - `destructive` 문장을 빨간색으로 강조한다.
+  - MySQL에서 문장이 2개 이상이면 "롤백 불가" 경고를 띄운다.
+  - SQL을 고치면 고친 SQL을 그대로 `apply_ddl`에 보낸다.
+- 적용 전 검사: 같은 `(conn, schema, table)` 데이터 탭에 보류 변경이 있으면 막고 안내한다.
+- 적용 후: 구조 다시 읽기, 트리 `refresh`, `schema_snapshot` 갱신, 열린 데이터 탭 `refresh`.
+
+**작업 예시**
+
+```rust
+// db/ddl.rs
+pub fn plan_alter(d: Driver, t: &QualifiedName, a: &TableStructure, b: &TableStructure) -> AppResult<Vec<RawStmt>> {
+    let diff = diff_columns(&a.columns, &b.columns); // Added / Dropped / Renamed / Modified{fields}
+    match d {
+        Driver::Postgres => Ok(pg::alter_columns(t, &diff)),
+        Driver::Mysql => Ok(vec![my::alter_table_one(t, &diff, &b.columns)]),
+        Driver::Sqlite if sqlite::alter_only(&diff) => Ok(sqlite::alter_columns(t, &diff)),
+        Driver::Sqlite => sqlite::rebuild_table(t, a, b),
+    }
+}
+```
+
+콜스택:
+```
+StructureTab.onApply
+ → guardPendingDataEdits(conn, schema, table)
+ → api.previewDdl(...) → invoke("preview_ddl") → db::ddl::plan_alter
+ → SubmitPreview(statements, destructive 강조) → 확인
+ → api.applyDdl(...) → invoke("apply_ddl") → read_only 검사 → 별도 연결에서 tx/순차 실행
+ → reloadStructure · tree.refresh · snapshot.refresh · dataTabs.refresh
+```
+
+**완료 조건**
+- Rust(SQLite 인메모리)
+  - 컬럼 추가·삭제·이름 변경 후 데이터가 보존된다.
+  - 타입·NULL·기본값 변경은 재생성으로 처리되며, 재생성 후 행 수, 인덱스, 트리거, FK가 보존되고 `foreign_key_check`가 비어 있다.
+  - 중간 실패 시 원래 테이블이 그대로 남는다.
+- 스냅샷(PG/MySQL)
+  - 위 각 변경의 생성 SQL을 확인한다. 식별자 인용(예약어·공백·따옴표 포함 이름)도 확인한다.
+  - MySQL은 여러 변경이 한 문장으로 묶이는지, `MODIFY`가 코멘트·문자셋·기본값을 보존하는지 확인한다.
+- vitest: `draft` 변경 판정(추가/수정/삭제/이름 변경), 행 되돌리기, 전체 취소.
+- 읽기 전용 접속에서 편집 UI가 꺼지고 `apply_ddl`이 거부된다.
+- 데이터 탭에 보류 변경이 있으면 적용이 막힌다.
+
+---
+
+### S2. 인덱스 · 제약 (PK / UNIQUE / FK / CHECK)
+
+**작업 내용**
+- `table_structure`에 `indexes`, `foreign_keys`, `checks`를 채운다.
+  - PG: `pg_index` + `pg_get_indexdef`, `pg_constraint`(`contype` p/u/f/c, `pg_get_constraintdef`)
+  - MySQL: `information_schema.STATISTICS`, `TABLE_CONSTRAINTS`, `KEY_COLUMN_USAGE`, `REFERENTIAL_CONSTRAINTS`, `CHECK_CONSTRAINTS`(8.0.16+ / MariaDB 10.2+). 이 버전 미만이면 CHECK 섹션에 "강제되지 않음" 안내를 띄운다.
+  - SQLite: `pragma_index_list` / `pragma_index_info`, `pragma_foreign_key_list`. CHECK는 `sqlite_master.sql`을 파싱한다(기존 SQL 토크나이저 재사용).
+- UI
+  - 인덱스: 이름, 컬럼 순서 목록, UNIQUE.
+  - PK: 컬럼 선택.
+  - FK: 컬럼 → 참조 테이블.컬럼, ON DELETE/UPDATE.
+  - CHECK: 이름 + 식(자유 입력).
+- DDL
+  - PG: `CREATE [UNIQUE] INDEX`, `DROP INDEX`, `ADD/DROP CONSTRAINT`. 인덱스 변경은 DROP + CREATE로 한다.
+  - MySQL: `ALTER TABLE` 한 문장에 `ADD/DROP INDEX`, `ADD/DROP PRIMARY KEY`, `ADD/DROP FOREIGN KEY`, `ADD/DROP CHECK`(MariaDB는 `DROP CONSTRAINT`)를 묶는다.
+  - SQLite
+    - 인덱스는 `CREATE/DROP INDEX`로 바로 처리한다.
+    - PK, UNIQUE 제약, FK, CHECK 변경은 재생성으로 처리한다.
+
+**완료 조건**
+- SQLite 인메모리
+  - 인덱스 추가/삭제
+  - 재생성으로 FK, CHECK 추가/삭제. FK 위반 데이터가 있으면 롤백되어 원래 상태가 유지된다.
+- 스냅샷(PG/MySQL): 복합 인덱스, 복합 PK 교체, FK 액션, CHECK 식 인용.
+- 서버 검증(Docker 후): 시드 테이블에서 각 작업을 한다.
+
+---
+
+### S3. 테이블 생성 · 삭제 · 이름 변경
+
+**작업 내용**
+- "새 테이블"
+  - 빈 `original`로 구조 탭을 열고, `CREATE TABLE`을 만든다.
+  - 컬럼, PK, UNIQUE, FK, CHECK, 자동 증가는 인라인으로 넣는다. 인덱스는 뒤에 `CREATE INDEX`로 만든다.
+  - PG 코멘트는 뒤에 `COMMENT ON`으로 넣는다.
+  - 저장하면 탭이 일반 구조 탭으로 바뀐다.
+- 이름 변경: 구조 탭 상단의 테이블 이름 입력란.
+  - PG `ALTER TABLE … RENAME TO`, MySQL `RENAME TABLE`, SQLite `ALTER TABLE … RENAME TO`.
+  - 열린 데이터 탭과 구조 탭의 대상 이름도 바꾼다.
+- 삭제: 트리 메뉴 "테이블 삭제…"
+  - 미리보기에서 테이블 이름을 그대로 입력해야 실행 버튼이 켜진다.
+  - 실행 후 해당 테이블의 탭들을 닫는다(데이터 탭에 보류 변경이 있으면 먼저 막는다).
+
+**완료 조건**
+- SQLite 인메모리: 생성, 이름 변경, 삭제가 되고, 생성 결과의 `table_structure`가 폼과 일치한다.
+- 스냅샷(PG/MySQL): `CREATE TABLE`(IDENTITY/AUTO_INCREMENT, 복합 PK, FK)을 확인한다.
+- vitest: 이름 입력이 일치해야만 실행할 수 있다. 이름을 바꾸면 탭 대상 이름이 갱신된다.
+
+---
+
+### S4. 문자셋 · 정렬규칙 · 코멘트 · 테이블 옵션
+
+**작업 내용**
+- 조회
+  - MySQL: `information_schema.TABLES`(`ENGINE`, `TABLE_COLLATION`, `ROW_FORMAT`, `TABLE_COMMENT`)
+  - 선택 목록: `SHOW CHARACTER SET` / `SHOW COLLATION`, `SHOW ENGINES`(목록은 접속당 캐시)
+  - PG: `obj_description`(테이블 코멘트), `pg_collation`
+- UI
+  - 옵션 섹션
+    - MySQL: 엔진, 문자셋/정렬규칙("기존 데이터 변환" / "기본값만" 라디오), ROW_FORMAT, 테이블 코멘트
+    - PG: 테이블 코멘트
+  - 컬럼 행
+    - 코멘트(PG/MySQL)
+    - 문자셋/정렬규칙: MySQL은 문자열 타입만, PG는 COLLATE만
+  - SQLite에서는 해당 입력란을 숨긴다.
+- DDL
+  - MySQL
+    - `ALTER TABLE t ENGINE=…, ROW_FORMAT=…, COMMENT='…'`
+    - `CONVERT TO CHARACTER SET … COLLATE …` 또는 `DEFAULT CHARACTER SET …`
+    - 컬럼은 `MODIFY … CHARACTER SET … COLLATE …`
+    - `CONVERT TO`와 엔진 변경은 `destructive`로 표시한다(테이블 전체를 다시 쓰고 잠근다).
+  - PG
+    - `COMMENT ON TABLE/COLUMN`
+    - `ALTER COLUMN … TYPE <같은 타입> COLLATE "x"`
+
+**완료 조건**
+- 스냅샷(MySQL)
+  - `CONVERT TO`와 `DEFAULT CHARACTER SET`이 구분된다.
+  - 코멘트 문자열이 이스케이프된다(따옴표, 백슬래시).
+  - 다른 변경과 함께 한 문장으로 묶인다.
+- 스냅샷(PG): `COMMENT ON` 인용, `COLLATE`가 포함된 타입 변경.
+- 서버 검증(Docker 후): utf8mb3 → utf8mb4 변환 후 한글 데이터가 보존된다.

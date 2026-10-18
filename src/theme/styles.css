@@ -658,3 +658,78 @@ textarea:focus {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* 구조 탭 */
+.structure {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 12px 16px;
+}
+.structure h4 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.structure-grid {
+  border-collapse: collapse;
+  margin-bottom: 6px;
+}
+.structure-grid th {
+  text-align: left;
+  font-weight: normal;
+  color: var(--muted);
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.structure-grid td {
+  padding: 1px 4px;
+  border-bottom: 1px solid var(--bg-3);
+}
+.structure-grid td.center {
+  text-align: center;
+}
+.structure-grid td.nowrap {
+  white-space: nowrap;
+}
+/* 입력 중에 열 너비가 바뀌지 않도록 고정 폭 */
+.structure-grid input:not([type="checkbox"]) {
+  width: 180px;
+}
+.structure-grid input.changed {
+  font-weight: 600;
+  border-color: var(--accent);
+}
+.structure-grid input[type="checkbox"].changed {
+  outline: 2px solid var(--accent);
+}
+.structure-grid tr.st-added {
+  background: var(--insert);
+}
+.structure-grid tr.st-modified {
+  background: var(--edit);
+}
+.structure-grid tr.st-deleted {
+  background: var(--delete);
+}
+.structure-grid tr.st-deleted input {
+  text-decoration: line-through;
+}
+.structure-grid .state {
+  display: inline-block;
+  min-width: 28px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ddl-warn {
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+.ddl-warn ul,
+.ddl-notes {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+}

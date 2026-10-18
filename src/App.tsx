@@ -6,6 +6,7 @@ import { RedisConsoleTab } from "./components/RedisConsoleTab";
 import { RedisKeyTab } from "./components/RedisKeyTab";
 import { Sidebar } from "./components/Sidebar";
 import { TableViewTab } from "./components/TableViewTab";
+import { StructureTab } from "./components/StructureTab";
 import { ExportProgressHost } from "./components/exportMenu";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
@@ -13,10 +14,10 @@ import { isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
 import { useTabs, type Tab } from "./store/tabs";
 import { useColorScheme, type Scheme } from "./theme";
 
-const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", redisKey: "🔑", mongoColl: "▤" };
+const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤" };
 
 const tabDetail = (t: Tab) =>
-  t.kind === "table" ? ` · ${t.schema}.${t.table}` : t.kind === "redisKey" ? ` · db${t.db} · ${t.key}` : t.kind === "mongoColl" ? ` · ${t.db}.${t.coll}` : "";
+  t.kind === "table" || t.kind === "structure" ? ` · ${t.schema}.${t.table}` : t.kind === "redisKey" ? ` · db${t.db} · ${t.key}` : t.kind === "mongoColl" ? ` · ${t.db}.${t.coll}` : "";
 
 /** 탭 종류와 접속 드라이버에 맞는 화면 */
 function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionConfig; scheme: Scheme; active: boolean }) {
@@ -24,6 +25,7 @@ function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionCon
     const sql = cfg as SqlConfig;
     if (t.kind === "console") return <ConsoleTab tabId={t.id} cfg={sql} scheme={scheme} active={active} />;
     if (t.kind === "table") return <TableViewTab tabId={t.id} cfg={sql} schema={t.schema} table={t.table} scheme={scheme} active={active} />;
+    if (t.kind === "structure") return <StructureTab tabId={t.id} cfg={sql} schema={t.schema} table={t.table} scheme={scheme} active={active} />;
   }
   if (cfg.driver === "redis") {
     if (t.kind === "console") return <RedisConsoleTab tabId={t.id} cfg={cfg} scheme={scheme} active={active} />;

@@ -21,6 +21,10 @@ interface TreeState {
   loadColumns: (connId: string, schema: string, table: string, force?: boolean) => Promise<ColumnMeta[]>;
   /** 접속 하위 캐시를 모두 비운다 */
   invalidate: (connId: string) => void;
+  /** 구조가 바뀐 테이블별 번호. 열린 데이터 탭이 구독해 다시 조회한다. */
+  versions: Record<string, number>;
+  /** 구조 변경 후: 컬럼·인덱스 캐시를 새로 읽고 데이터 탭에 알린다 */
+  structureChanged: (connId: string, schema: string, table: string) => Promise<void>;
 }
 
 const dropPrefix = <T>(rec: Record<string, T>, connId: string) =>
@@ -108,4 +112,17 @@ export const useTree = create<TreeState>((set, get) => ({
       columns: dropPrefix(s.columns, connId),
       indexes: dropPrefix(s.indexes, connId),
     })),
+
+  versions: {},
+
+  structureChanged: async (connId, schema, table) => {
+    const k = nodeKey(connId, schema, table);
+    set((s) => {
+      const indexes = { ...s.indexes };
+      delete indexes[k];
+      return { indexes };
+    });
+    await get().loadColumns(connId, schema, table, true);
+    set((s) => ({ versions: { ...s.versions, [k]: (s.versions[k] ?? 0) + 1 } }));
+  },
 }));

@@ -232,6 +232,7 @@ function TableNode(props: { connId: string; schema: string; table: string; isVie
         onContextMenu={(e) =>
           showContextMenu(e, [
             { label: "데이터 열기", onClick: openTable },
+            { label: "구조 편집", disabled: props.isView, onClick: () => useTabs.getState().openStructure(connId, schema, table) },
             {
               label: "새로고침",
               onClick: () => {

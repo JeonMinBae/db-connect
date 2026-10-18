@@ -1,4 +1,5 @@
 pub mod conn;
+pub mod ddl;
 pub mod edit;
 pub mod exec;
 pub mod export;

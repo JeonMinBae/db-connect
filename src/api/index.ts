@@ -26,7 +26,7 @@ export interface RawStmt {
   /** UPDATE/DELETE: 정확히 1행에 영향을 줘야 한다 */
   expect_one: boolean;
 }
-import type { AppError, ColumnMeta, ConnectionConfig, ExecResult, IndexInfo, SnapshotTable, TableInfo } from "./types";
+import type { AppError, ColumnMeta, ConnectionConfig, DdlPlan, ExecResult, IndexInfo, SnapshotTable, TableInfo, TableStructure } from "./types";
 
 /** 파일 경로는 넘기지 않는다. 백엔드가 대화상자로 고른다. */
 export interface BlobReq {
@@ -91,6 +91,14 @@ export const api = {
   previewChanges: (req: SubmitReq) => invoke<RawStmt[]>("preview_changes", { req }),
   /** 미리보기에서 고친 SQL을 한 트랜잭션으로 실행 */
   submitSql: (connId: string, consoleId: string | null, statements: RawStmt[]) => invoke<void>("submit_sql", { connId, consoleId, statements }),
+
+  // 구조 편집
+  tableStructure: (connId: string, schema: string, table: string) => invoke<TableStructure>("table_structure", { connId, schema, table }),
+  /** 그사이 다른 곳에서 구조가 바뀌었으면 오류 */
+  previewDdl: (connId: string, schema: string, table: string, original: TableStructure, draft: TableStructure) =>
+    invoke<DdlPlan>("preview_ddl", { connId, schema, table, original, draft }),
+  /** 콘솔 트랜잭션과 무관한 자동 커밋 연결에서 실행 */
+  applyDdl: (connId: string, statements: string[]) => invoke<void>("apply_ddl", { connId, statements }),
 
   // Redis
   redisDbs: (connId: string) => invoke<{ db: number; keys: number }[]>("redis_dbs", { connId }),

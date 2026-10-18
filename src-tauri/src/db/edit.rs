@@ -61,7 +61,7 @@ pub fn quote_ident(d: Driver, s: &str) -> String {
     }
 }
 
-fn table_ref(d: Driver, schema: Option<&str>, table: &str) -> String {
+pub fn table_ref(d: Driver, schema: Option<&str>, table: &str) -> String {
     match schema.filter(|s| !s.is_empty() && d != Driver::Sqlite) {
         Some(s) => format!("{}.{}", quote_ident(d, s), quote_ident(d, table)),
         None => quote_ident(d, table),

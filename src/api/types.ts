@@ -87,3 +87,33 @@ export const text = (v: string): Cell => ({ t: "Text", v });
 
 /** SQL 접속 설정 (SQL 콘솔·테이블 뷰·편집 코드용) */
 export type SqlConfig = ConnectionConfig & { driver: Driver };
+
+/** 구조 탭의 컬럼 정의 (src-tauri db/structure.rs) */
+export interface ColumnDef {
+  /** 원래 컬럼 이름. 새 컬럼이면 null */
+  orig_name: string | null;
+  name: string;
+  full_type: string;
+  nullable: boolean;
+  /** 기본값 SQL 식 (문자열은 따옴표 포함) */
+  default: string | null;
+  auto_increment: boolean;
+  /** 생성(계산) 컬럼: 구조 탭에서 바꾸지 않는다 */
+  generated: boolean;
+  comment: string | null;
+  charset: string | null;
+  collation: string | null;
+  on_update: string | null;
+}
+
+export interface TableStructure {
+  columns: ColumnDef[];
+  primary_key: string[];
+}
+
+export interface DdlPlan {
+  statements: { sql: string; destructive: boolean }[];
+  /** 데이터가 사라지거나 바뀔 수 있는 변경 (경고 상자) */
+  warnings: string[];
+  notes: string[];
+}
