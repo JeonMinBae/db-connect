@@ -38,6 +38,7 @@ import { useTree } from "../store/tree";
 import { confirmDialog, toast } from "../store/ui";
 import type { Scheme } from "../theme";
 import { DdlPreview } from "./DdlPreview";
+import { showContextMenu } from "./ui";
 
 const STATE_LABEL: Record<RowState, string> = { added: "추가", deleted: "삭제", modified: "수정", same: "" };
 
@@ -64,14 +65,17 @@ function ListInput(props: { value: string[]; onChange: (v: string[]) => void; op
         }}
       />
       {props.options && !props.disabled && (
-        <select value="" title="컬럼 추가" disabled={!rest.length} onChange={(e) => e.target.value && props.onChange([...props.value, e.target.value])}>
-          <option value="">＋</option>
-          {rest.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
+        <button
+          className="icon"
+          title="컬럼 추가"
+          disabled={!rest.length}
+          onClick={(e) => {
+            const b = e.currentTarget.getBoundingClientRect();
+            showContextMenu({ clientX: b.left, clientY: b.bottom }, rest.map((o) => ({ label: o, onClick: () => props.onChange([...props.value, o]) })));
+          }}
+        >
+          ＋
+        </button>
       )}
     </span>
   );

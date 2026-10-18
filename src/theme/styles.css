@@ -792,7 +792,12 @@ pre.raw-sql {
   gap: 2px;
   align-items: center;
 }
-.col-list select {
-  width: 34px;
-  padding: 3px 2px;
+.col-list button.icon {
+  color: var(--accent);
+  padding: 2px 4px;
+}
+/* 컬럼이 많을 때 메뉴가 화면을 넘지 않게 */
+.ctx-menu {
+  max-height: 60vh;
+  overflow-y: auto;
 }
