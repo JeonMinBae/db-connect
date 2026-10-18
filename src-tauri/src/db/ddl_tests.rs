@@ -450,3 +450,51 @@ async fn sqlite_create_rename_drop() {
     apply(&mut AnyConn::Lite(&mut c), &[plan_drop(Driver::Sqlite, None, "child").sql]).await.unwrap();
     assert!(load_sqlite(&mut c, "child").await.unwrap().columns.is_empty());
 }
+
+#[test]
+fn table_options() {
+    let mut a = st(vec![col("id", "int"), col("s", "varchar(10)")], &["id"]);
+    a.options = TableOptions { engine: Some("MyISAM".into()), charset: Some("utf8mb3".into()), collation: Some("utf8mb3_general_ci".into()), row_format: Some("Dynamic".into()), comment: None, convert: false };
+    let mut b = a.clone();
+    b.options.engine = Some("InnoDB".into());
+    b.options.charset = Some("utf8mb4".into());
+    b.options.collation = Some("utf8mb4_unicode_ci".into());
+    b.options.convert = true;
+    b.options.comment = Some("it's \\ ok".into());
+    b.columns[1].comment = Some("이름".into());
+    let p = plan_alter(Driver::Mysql, Some("db"), "t", &a, &b, None).unwrap();
+    assert_eq!(
+        sqls(&p),
+        ["ALTER TABLE `db`.`t`\n  MODIFY COLUMN `s` varchar(10) NULL COMMENT '이름',\n  ENGINE = InnoDB,\n  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,\n  COMMENT = 'it''s \\\\ ok'"]
+    );
+    assert!(p.statements[0].destructive);
+    assert_eq!(p.warnings.len(), 2);
+    // 기본값만 바꾸기
+    let mut c = a.clone();
+    c.options.charset = Some("utf8mb4".into());
+    c.options.collation = None;
+    assert_eq!(sqls(&plan_alter(Driver::Mysql, None, "t", &a, &c, None).unwrap()), ["ALTER TABLE `t`\n  DEFAULT CHARACTER SET utf8mb4"]);
+    // 문자셋 없이 정렬규칙만 바꿀 수 없다
+    let mut bad = a.clone();
+    bad.options.charset = None;
+    bad.options.collation = Some("x".into());
+    assert!(plan_alter(Driver::Mysql, None, "t", &a, &bad, None).is_err());
+    // PG: 테이블·컬럼 코멘트, 컬럼 정렬규칙
+    let mut pg = a.clone();
+    pg.options = TableOptions::default();
+    let mut pg2 = pg.clone();
+    pg2.options.comment = Some("표".into());
+    pg2.columns[1].collation = Some("C".into());
+    assert_eq!(
+        sqls(&plan_alter(Driver::Postgres, Some("s"), "t", &pg, &pg2, None).unwrap()),
+        [
+            r#"ALTER TABLE "s"."t" ALTER COLUMN "s" TYPE varchar(10) COLLATE "C" USING "s"::varchar(10)"#,
+            r#"COMMENT ON TABLE "s"."t" IS '표'"#,
+        ]
+    );
+    // 새 테이블
+    let mut n = st(vec![new_col("id", "int")], &[]);
+    n.options = TableOptions { engine: Some("InnoDB".into()), charset: Some("utf8mb4".into()), comment: Some("c".into()), ..Default::default() };
+    assert_eq!(sqls(&plan_create(Driver::Mysql, None, "n", &n).unwrap()), ["CREATE TABLE `n` (\n  `id` int NULL\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='c'"]);
+    assert_eq!(sqls(&plan_create(Driver::Postgres, Some("s"), "n", &n).unwrap())[1], r#"COMMENT ON TABLE "s"."n" IS 'c'"#);
+}

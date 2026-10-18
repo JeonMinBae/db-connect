@@ -764,3 +764,26 @@ pre.raw-sql {
   font-family: var(--mono);
   white-space: pre-wrap;
 }
+.options-form {
+  display: grid;
+  grid-template-columns: 90px 260px;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.options-form.st-modified {
+  background: var(--edit);
+}
+.options-form .full {
+  grid-column: 1 / -1;
+}
+.options-form input.wide {
+  width: 420px;
+}
+.options-form .convert {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 100px;
+}

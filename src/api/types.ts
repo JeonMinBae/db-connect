@@ -150,6 +150,25 @@ export interface TableStructure {
   checks: CheckDef[];
   /** CHECK 제약을 조회할 수 없는 서버 (오래된 MySQL/MariaDB) */
   checks_unsupported: boolean;
+  options: TableOptions;
+}
+
+/** 테이블 옵션. 코멘트는 PG·MySQL, 나머지는 MySQL만 */
+export interface TableOptions {
+  comment: string | null;
+  engine: string | null;
+  charset: string | null;
+  collation: string | null;
+  row_format: string | null;
+  /** 초안에서만: 문자셋을 바꿀 때 기존 데이터도 변환 (CONVERT TO) */
+  convert: boolean;
+}
+
+export interface DdlChoices {
+  charsets: string[];
+  /** [정렬규칙, 문자셋] (PG는 문자셋이 빈 문자열) */
+  collations: [string, string][];
+  engines: string[];
 }
 
 export interface DdlPlan {

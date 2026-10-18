@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::db::edit::{literal, quote_ident, table_ref};
 use crate::db::pool::AnyConn;
-use crate::db::structure::{CheckDef, ColumnDef, ForeignKeyDef, IndexDef, LiteAux, TableStructure};
+use crate::db::structure::{CheckDef, ColumnDef, ForeignKeyDef, IndexDef, LiteAux, TableOptions, TableStructure};
 use crate::error::{AppError, AppResult};
 use crate::store::config::Driver;
 
@@ -334,13 +334,17 @@ pub fn plan_create(d: Driver, schema: Option<&str>, table: &str, draft: &TableSt
         }
         _ => return Err(AppError::user("SQL 접속이 아닙니다")),
     };
-    p.push(format!("CREATE TABLE {t} (\n  {body}\n)"), false);
+    let suffix = if d == Driver::Mysql { my_create_options(&draft.options) } else { String::new() };
+    p.push(format!("CREATE TABLE {t} (\n  {body}\n){suffix}"), false);
     if d != Driver::Mysql {
         for ix in draft.indexes.iter().filter(|ix| !(d == Driver::Sqlite && ix.constraint)) {
             p.push(format!("CREATE {}INDEX {} ON {t} ({})", if ix.unique { "UNIQUE " } else { "" }, q(&ix.name), col_list(d, &ix.columns)), false);
         }
     }
     if d == Driver::Postgres {
+        if let Some(c) = &draft.options.comment {
+            p.push(format!("COMMENT ON TABLE {t} IS {}", literal(d, Some(c))), false);
+        }
         for c in draft.columns.iter().filter(|c| c.comment.is_some()) {
             p.push(comment_on(&t, &q(&c.name), c.comment.as_deref()), false);
         }
@@ -501,6 +505,9 @@ fn pg_plan(t: &str, schema: &str, orig: &TableStructure, draft: &TableStructure,
     for f in &d.fk_add {
         p.push(format!("ALTER TABLE {t} ADD {}", fk_clause(PG, Some(schema), f)), false);
     }
+    if orig.options.comment != draft.options.comment {
+        p.push(format!("COMMENT ON TABLE {t} IS {}", draft.options.comment.as_deref().map_or("NULL".to_string(), |c| literal(PG, Some(c)))), false);
+    }
     Ok(p)
 }
 
@@ -536,6 +543,62 @@ fn my_col_def(c: &ColumnDef) -> String {
     }
     if let Some(cm) = &c.comment {
         s += &format!(" COMMENT {}", literal(Driver::Mysql, Some(cm)));
+    }
+    s
+}
+
+fn opt(v: &Option<String>) -> Option<&str> {
+    v.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// MySQL 테이블 옵션을 바꾸는 절과 경고
+fn my_option_clauses(a: &TableOptions, b: &TableOptions) -> AppResult<(Vec<String>, Vec<String>)> {
+    let mut clauses = Vec::new();
+    let mut warnings = Vec::new();
+    if opt(&a.engine) != opt(&b.engine) {
+        if let Some(e) = opt(&b.engine) {
+            clauses.push(format!("ENGINE = {e}"));
+            warnings.push(format!("엔진 변경 ({} → {e}): 테이블 전체를 다시 쓰고, 그동안 테이블이 잠깁니다.", opt(&a.engine).unwrap_or("?")));
+        }
+    }
+    if opt(&a.charset) != opt(&b.charset) || opt(&a.collation) != opt(&b.collation) {
+        let cs = opt(&b.charset).ok_or_else(|| AppError::user("테이블 문자셋을 지정하세요"))?;
+        let co = opt(&b.collation).map(|c| format!(" COLLATE {c}")).unwrap_or_default();
+        if b.convert {
+            clauses.push(format!("CONVERT TO CHARACTER SET {cs}{co}"));
+            warnings.push(format!("문자셋 변환 ({} → {cs}): 모든 문자열 컬럼의 데이터를 변환하고 테이블을 다시 씁니다.", opt(&a.charset).unwrap_or("?")));
+        } else {
+            clauses.push(format!("DEFAULT CHARACTER SET {cs}{co}"));
+        }
+    }
+    if opt(&a.row_format) != opt(&b.row_format) {
+        if let Some(r) = opt(&b.row_format) {
+            clauses.push(format!("ROW_FORMAT = {r}"));
+        }
+    }
+    if opt(&a.comment) != opt(&b.comment) {
+        clauses.push(format!("COMMENT = {}", literal(Driver::Mysql, Some(opt(&b.comment).unwrap_or("")))));
+    }
+    Ok((clauses, warnings))
+}
+
+/// CREATE TABLE 뒤의 MySQL 테이블 옵션
+fn my_create_options(o: &TableOptions) -> String {
+    let mut s = String::new();
+    if let Some(e) = opt(&o.engine) {
+        s += &format!(" ENGINE={e}");
+    }
+    if let Some(cs) = opt(&o.charset) {
+        s += &format!(" DEFAULT CHARSET={cs}");
+    }
+    if let Some(co) = opt(&o.collation) {
+        s += &format!(" COLLATE={co}");
+    }
+    if let Some(r) = opt(&o.row_format) {
+        s += &format!(" ROW_FORMAT={r}");
+    }
+    if let Some(c) = opt(&o.comment) {
+        s += &format!(" COMMENT={}", literal(Driver::Mysql, Some(c)));
     }
     s
 }
@@ -605,6 +668,10 @@ fn my_plan(t: &str, schema: Option<&str>, orig: &TableStructure, draft: &TableSt
     for f in &d.fk_add {
         clauses.push(format!("ADD {}", fk_clause(MY, schema, f)));
     }
+    let (opts, warnings) = my_option_clauses(&orig.options, &draft.options)?;
+    clauses.extend(opts);
+    destructive |= !warnings.is_empty();
+    p.warnings.extend(warnings);
     if !clauses.is_empty() {
         p.push(format!("ALTER TABLE {t}\n  {}", clauses.join(",\n  ")), destructive);
     }

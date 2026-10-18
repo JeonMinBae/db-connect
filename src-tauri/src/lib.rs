@@ -37,6 +37,7 @@ pub fn run() {
             commands::ddl::preview_ddl,
             commands::ddl::preview_drop,
             commands::ddl::apply_ddl,
+            commands::ddl::ddl_choices,
             commands::edit::submit_changes,
             commands::edit::preview_changes,
             commands::edit::submit_sql,

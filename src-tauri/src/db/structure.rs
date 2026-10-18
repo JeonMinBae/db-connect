@@ -102,6 +102,61 @@ pub struct TableStructure {
     /// CHECK 제약을 조회할 수 없는 서버 (MySQL 8.0.16 / MariaDB 10.2 미만)
     #[serde(default)]
     pub checks_unsupported: bool,
+    #[serde(default)]
+    pub options: TableOptions,
+}
+
+/// 테이블 옵션. 코멘트는 PG·MySQL, 나머지는 MySQL만.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TableOptions {
+    #[serde(default)]
+    pub comment: Option<String>,
+    #[serde(default)]
+    pub engine: Option<String>,
+    #[serde(default)]
+    pub charset: Option<String>,
+    #[serde(default)]
+    pub collation: Option<String>,
+    #[serde(default)]
+    pub row_format: Option<String>,
+    /// 초안에서만: 문자셋을 바꿀 때 기존 데이터도 변환한다 (CONVERT TO). false면 기본값만 바꾼다.
+    #[serde(default)]
+    pub convert: bool,
+}
+
+/// 문자셋·정렬규칙·엔진 선택 목록 (MySQL), 정렬규칙 (PG)
+#[derive(Serialize, Debug, Clone, Default)]
+pub struct DdlChoices {
+    pub charsets: Vec<String>,
+    /// (정렬규칙, 문자셋). PG는 문자셋이 빈 문자열
+    pub collations: Vec<(String, String)>,
+    pub engines: Vec<String>,
+}
+
+pub async fn choices(pool: &DbPool) -> AppResult<DdlChoices> {
+    Ok(match pool {
+        DbPool::Pg(p) => DdlChoices {
+            collations: sqlx::query_scalar::<_, String>("SELECT DISTINCT collname::text FROM pg_collation ORDER BY 1")
+                .fetch_all(p)
+                .await?
+                .into_iter()
+                .map(|c| (c, String::new()))
+                .collect(),
+            ..Default::default()
+        },
+        DbPool::My(p) => {
+            let col = |sql: &'static str| sqlx::query(sql).fetch_all(p);
+            let charsets = col("SELECT CHARACTER_SET_NAME FROM information_schema.CHARACTER_SETS ORDER BY 1").await?.iter().filter_map(|r| os(r, 0)).collect();
+            let collations = col("SELECT COLLATION_NAME, CHARACTER_SET_NAME FROM information_schema.COLLATIONS ORDER BY 2, 1")
+                .await?
+                .iter()
+                .map(|r| (os(r, 0).unwrap_or_default(), os(r, 1).unwrap_or_default()))
+                .collect();
+            let engines = col("SELECT ENGINE FROM information_schema.ENGINES WHERE SUPPORT IN ('YES', 'DEFAULT') ORDER BY 1").await?.iter().filter_map(|r| os(r, 0)).collect();
+            DdlChoices { charsets, collations, engines }
+        }
+        DbPool::Lite(_) => DdlChoices::default(),
+    })
 }
 
 fn os<R: Row>(row: &R, i: usize) -> Option<String>
@@ -352,18 +407,34 @@ async fn load_pg(p: &sqlx::PgPool, schema: &str, table: &str) -> AppResult<Table
             CheckDef { orig_name: Some(name.clone()), name, expr: unwrap_parens(body) }
         })
         .collect();
-    Ok(TableStructure { columns, primary_key, primary_key_name, indexes, foreign_keys, checks, checks_unsupported: false })
+    let comment: Option<String> = sqlx::query_scalar(&format!("SELECT obj_description({PG_OID}, 'pg_class')")).bind(schema).bind(table).fetch_one(p).await?;
+    let options = TableOptions { comment, ..Default::default() };
+    Ok(TableStructure { columns, primary_key, primary_key_name, indexes, foreign_keys, checks, checks_unsupported: false, options })
 }
 
 async fn load_mysql(p: &sqlx::MySqlPool, schema: &str, table: &str) -> AppResult<TableStructure> {
     let version: String = sqlx::query_scalar("SELECT CAST(VERSION() AS CHAR)").fetch_one(p).await?;
     let mariadb = version.to_ascii_lowercase().contains("mariadb");
-    let table_coll: Option<String> = sqlx::query("SELECT TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?")
-        .bind(schema)
-        .bind(table)
-        .fetch_optional(p)
-        .await?
-        .and_then(|r| os(&r, 0));
+    let options = sqlx::query(
+        "SELECT t.ENGINE, c.CHARACTER_SET_NAME, t.TABLE_COLLATION, t.ROW_FORMAT, t.TABLE_COMMENT
+         FROM information_schema.TABLES t
+         LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME = t.TABLE_COLLATION
+         WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?",
+    )
+    .bind(schema)
+    .bind(table)
+    .fetch_optional(p)
+    .await?
+    .map(|r| TableOptions {
+        engine: os(&r, 0),
+        charset: os(&r, 1),
+        collation: os(&r, 2),
+        row_format: os(&r, 3),
+        comment: os(&r, 4).filter(|c| !c.is_empty()),
+        convert: false,
+    })
+    .unwrap_or_default();
+    let table_coll = options.collation.clone();
     let rows = sqlx::query(MY_STRUCTURE).bind(schema).bind(table).fetch_all(p).await?;
     let columns = rows
         .iter()
@@ -470,7 +541,7 @@ async fn load_mysql(p: &sqlx::MySqlPool, schema: &str, table: &str) -> AppResult
         // CHECK_CONSTRAINTS가 없는 서버
         Err(_) => (vec![], true),
     };
-    Ok(TableStructure { columns, primary_key, primary_key_name: None, indexes, foreign_keys, checks, checks_unsupported })
+    Ok(TableStructure { columns, primary_key, primary_key_name: None, indexes, foreign_keys, checks, checks_unsupported, options })
 }
 
 /// pragma_table_info의 dflt_value는 식 기본값의 바깥 괄호를 떼고 돌려준다. DEFAULT 절에 다시 쓸 수 있게
@@ -564,7 +635,7 @@ pub async fn load_sqlite(c: &mut sqlx::SqliteConnection, table: &str) -> AppResu
         .enumerate()
         .map(|(i, (name, expr))| CheckDef { orig_name: Some(name.clone().unwrap_or_else(|| format!("#{i}"))), name: name.unwrap_or_default(), expr: unwrap_parens(&expr) })
         .collect();
-    Ok(TableStructure { columns, primary_key, primary_key_name: None, indexes, foreign_keys, checks, checks_unsupported: false })
+    Ok(TableStructure { columns, primary_key, primary_key_name: None, indexes, foreign_keys, checks, checks_unsupported: false, options: TableOptions::default() })
 }
 
 /// SQLite 재생성에 필요한 원문 (CREATE TABLE·트리거)

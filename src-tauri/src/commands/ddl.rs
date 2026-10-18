@@ -63,3 +63,9 @@ pub async fn apply_ddl(state: State<'_, AppState>, conn_id: String, statements: 
     let mut conn = connected.pool.acquire().await?;
     ddl::apply(&mut conn.as_any(), &statements).await
 }
+
+/// 구조 탭 입력란 제안 목록 (문자셋·정렬규칙·엔진)
+#[tauri::command]
+pub async fn ddl_choices(state: State<'_, AppState>, conn_id: String) -> AppResult<structure::DdlChoices> {
+    structure::choices(&state.connected(&conn_id).await?.pool).await
+}

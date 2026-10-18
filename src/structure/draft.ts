@@ -1,4 +1,4 @@
-import type { CheckDef, ColumnDef, Driver, FkAction, ForeignKeyDef, IndexDef, TableStructure } from "../api/types";
+import type { CheckDef, ColumnDef, Driver, FkAction, ForeignKeyDef, IndexDef, TableOptions, TableStructure } from "../api/types";
 
 /** 구조 탭의 컬럼 행. 삭제한 원래 컬럼도 되돌릴 수 있게 목록에 남긴다. */
 export interface Row {
@@ -103,6 +103,7 @@ export interface Draft {
   indexes: Entry<IndexDef>[];
   fks: Entry<ForeignKeyDef>[];
   checks: Entry<CheckDef>[];
+  options: TableOptions;
 }
 
 export const entriesOf = <T extends Keyed>(list: T[]): Entry<T>[] => list.map((d) => ({ key: "o:" + d.orig_name, def: structuredClone(d), deleted: false }));
@@ -115,6 +116,7 @@ export const draftOf = (s: TableStructure): Draft => ({
   indexes: entriesOf(s.indexes),
   fks: entriesOf(s.foreign_keys),
   checks: entriesOf(s.checks),
+  options: { ...s.options },
 });
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -140,9 +142,26 @@ export const removeEntry = <T extends Keyed>(list: Entry<T>[], key: string): Ent
 
 export const pkChanged = (s: TableStructure, d: Draft) => !sameJson(s.primary_key, d.pk);
 
+/** 빈 문자열은 없음과 같다. convert는 바꾸는 방법일 뿐이라 비교하지 않는다. */
+const blank = (v: string | null) => (v?.trim() ? v : null);
+const normOptions = (o: TableOptions): TableOptions => ({
+  comment: blank(o.comment),
+  engine: blank(o.engine),
+  charset: blank(o.charset),
+  collation: blank(o.collation),
+  row_format: blank(o.row_format),
+  convert: false,
+});
+export const optionsChanged = (s: TableStructure, d: Draft) => !sameJson(normOptions(s.options), normOptions(d.options));
+/** 문자셋·정렬규칙이 바뀌었는지 (기존 데이터 변환 여부를 고르게 한다) */
+export function charsetChanged(s: TableStructure, d: Draft) {
+  const [a, b] = [normOptions(s.options), normOptions(d.options)];
+  return a.charset !== b.charset || a.collation !== b.collation;
+}
+
 export function draftChangeCount(s: TableStructure, d: Draft): number {
   const n = <T extends Keyed>(orig: T[], list: Entry<T>[]) => list.filter((e) => entryState(orig, e) !== "same").length;
-  return changeCount(s, d.columns) + (pkChanged(s, d) ? 1 : 0) + n(s.indexes, d.indexes) + n(s.foreign_keys, d.fks) + n(s.checks, d.checks);
+  return changeCount(s, d.columns) + (pkChanged(s, d) ? 1 : 0) + n(s.indexes, d.indexes) + n(s.foreign_keys, d.fks) + n(s.checks, d.checks) + (optionsChanged(s, d) ? 1 : 0);
 }
 
 const live = <T>(list: Entry<T>[]) => list.filter((e) => !e.deleted).map((e) => e.def);
@@ -156,6 +175,7 @@ export const toStructure = (s: TableStructure, d: Draft): TableStructure => ({
   foreign_keys: live(d.fks),
   checks: live(d.checks),
   checks_unsupported: s.checks_unsupported,
+  options: d.options,
 });
 
 /** 컬럼 이름을 바꾸면 기본키·인덱스·외래 키의 컬럼 목록도 따라 바꾼다 (식 인덱스·CHECK 식은 그대로) */

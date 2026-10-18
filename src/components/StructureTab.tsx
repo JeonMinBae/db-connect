@@ -1,8 +1,10 @@
 import { memo, useEffect, useState, type ReactNode } from "react";
 import { api, errorMessage } from "../api";
-import type { CheckDef, ColumnDef, ForeignKeyDef, IndexDef, SqlConfig, TableStructure } from "../api/types";
+import type { CheckDef, ColumnDef, DdlChoices, ForeignKeyDef, IndexDef, SqlConfig, TableOptions, TableStructure } from "../api/types";
 import {
   canReorder,
+  charsetChanged,
+  optionsChanged,
   changedFields,
   draftChangeCount,
   draftOf,
@@ -90,7 +92,7 @@ function Section(props: { title: string; onAdd?: () => void; addLabel?: string; 
 }
 
 /** 테이블 구조 탭: 컬럼 · 기본키 · 인덱스 · 외래 키 · CHECK */
-const EMPTY: TableStructure = { columns: [], primary_key: [], primary_key_name: null, indexes: [], foreign_keys: [], checks: [], checks_unsupported: false };
+const EMPTY: TableStructure = { columns: [], primary_key: [], primary_key_name: null, indexes: [], foreign_keys: [], checks: [], checks_unsupported: false, options: { comment: null, engine: null, charset: null, collation: null, row_format: null, convert: false } };
 
 export const StructureTab = memo(function StructureTab(props: {
   tabId: string;
@@ -106,6 +108,7 @@ export const StructureTab = memo(function StructureTab(props: {
   const [orig, setOrig] = useState<TableStructure | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [name, setName] = useState(table);
+  const [choices, setChoices] = useState<DdlChoices | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TableStructure | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -116,6 +119,7 @@ export const StructureTab = memo(function StructureTab(props: {
 
   const load = async (t = table) => {
     if (!(await useConnections.getState().connect(cfg.id))) return;
+    if (cfg.driver !== "sqlite" && !choices) api.ddlChoices(cfg.id).then(setChoices, () => setChoices({ charsets: [], collations: [], engines: [] }));
     if (isNew && !t) {
       const d = draftOf(EMPTY);
       const id = newRow();
@@ -160,6 +164,7 @@ export const StructureTab = memo(function StructureTab(props: {
       const next = { ...d, columns: d.columns.map((r) => (r.key === key ? { ...r, col: { ...r.col, ...patch } } : r)) };
       return patch.name !== undefined ? renameColumnRefs(next, before, patch.name) : next;
     });
+  const setOption = (patch: Partial<TableOptions>) => edit((d) => ({ ...d, options: { ...d.options, ...patch } }));
   const removeCol = (key: string) => edit((d) => ({ ...d, columns: d.columns.flatMap((r) => (r.key !== key ? [r] : r.col.orig_name === null ? [] : [{ ...r, deleted: true }])) }));
   const updateEntry = <K extends "indexes" | "fks" | "checks">(list: K, key: string, patch: Partial<Draft[K][number]["def"]>) =>
     edit((d) => ({ ...d, [list]: (d[list] as Entry<object>[]).map((e) => (e.key === key ? { ...e, def: { ...e.def, ...patch } } : e)) }));
@@ -193,6 +198,13 @@ export const StructureTab = memo(function StructureTab(props: {
   const reordered = orig && draft ? orderChanged(orig, draft.columns) : false;
   const liveCols = draft?.columns.filter((r) => !r.deleted).map((r) => r.col.name) ?? [];
   const lite = cfg.driver === "sqlite";
+  const my = cfg.driver === "mysql";
+  const charsets = `charsets-${props.tabId}`;
+  /** 정렬규칙 제안 목록 id (문자셋별로 걸러 둔다) */
+  const collationsId = (cs: string | null) => `coll-${props.tabId}-${cs ?? ""}`;
+  const collationLists = Array.from(
+    new Set([null, draft?.options.charset ?? null, ...(draft?.columns.map((r) => r.col.charset) ?? [])]),
+  );
 
   return (
     <>
@@ -247,6 +259,29 @@ export const StructureTab = memo(function StructureTab(props: {
                 <option key={c} value={c} />
               ))}
             </datalist>
+            {choices && (
+              <>
+                <datalist id={charsets}>
+                  {choices.charsets.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
+                <datalist id={`engines-${props.tabId}`}>
+                  {choices.engines.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
+                {collationLists.map((cs) => (
+                  <datalist key={cs ?? ""} id={collationsId(cs)}>
+                    {choices.collations
+                      .filter(([, c]) => !cs || !c || c === cs)
+                      .map(([co]) => (
+                        <option key={co} value={co} />
+                      ))}
+                  </datalist>
+                ))}
+              </>
+            )}
 
             <Section title="컬럼" addLabel="컬럼" onAdd={ro ? undefined : () => edit((d) => ({ ...d, columns: [...d.columns, newRow()] }))}>
               <table className="structure-grid">
@@ -259,6 +294,9 @@ export const StructureTab = memo(function StructureTab(props: {
                     <th title="NULL 허용">NULL</th>
                     <th>기본값</th>
                     <th title="자동 증가">자동 증가</th>
+                    {my && <th>문자셋</th>}
+                    {!lite && <th>정렬규칙</th>}
+                    {!lite && <th>코멘트</th>}
                     <th />
                   </tr>
                 </thead>
@@ -304,6 +342,35 @@ export const StructureTab = memo(function StructureTab(props: {
                         <td className="center">
                           <input type="checkbox" className={cls("auto_increment")} checked={r.col.auto_increment} disabled={lock} onChange={(e) => updateCol(r.key, { auto_increment: e.target.checked })} />
                         </td>
+                        {my && (
+                          <td>
+                            <input
+                              className={`narrow ${cls("charset") ?? ""}`}
+                              list={charsets}
+                              value={r.col.charset ?? ""}
+                              disabled={lock}
+                              placeholder="테이블 기본"
+                              onChange={(e) => updateCol(r.key, { charset: e.target.value || null })}
+                            />
+                          </td>
+                        )}
+                        {!lite && (
+                          <td>
+                            <input
+                              className={`narrow ${cls("collation") ?? ""}`}
+                              list={collationsId(my ? (r.col.charset ?? draft.options.charset) : null)}
+                              value={r.col.collation ?? ""}
+                              disabled={lock}
+                              placeholder="기본"
+                              onChange={(e) => updateCol(r.key, { collation: e.target.value || null })}
+                            />
+                          </td>
+                        )}
+                        {!lite && (
+                          <td>
+                            <input className={`narrow ${cls("comment") ?? ""}`} value={r.col.comment ?? ""} disabled={lock} placeholder="" onChange={(e) => updateCol(r.key, { comment: e.target.value || null })} />
+                          </td>
+                        )}
                         <RowActions
                           state={st}
                           ro={ro}
@@ -521,6 +588,49 @@ export const StructureTab = memo(function StructureTab(props: {
                 </table>
               )}
             </Section>
+
+            {!lite && (
+              <Section title="테이블 옵션">
+                <div className={`options-form${optionsChanged(orig, draft) ? " st-modified" : ""}`}>
+                  {my && (
+                    <>
+                      <label>엔진</label>
+                      <input list={`engines-${props.tabId}`} value={draft.options.engine ?? ""} disabled={ro} onChange={(e) => setOption({ engine: e.target.value || null })} />
+                      <label>문자셋</label>
+                      <input list={charsets} value={draft.options.charset ?? ""} disabled={ro} onChange={(e) => setOption({ charset: e.target.value || null })} />
+                      <label>정렬규칙</label>
+                      <input list={collationsId(draft.options.charset)} value={draft.options.collation ?? ""} disabled={ro} onChange={(e) => setOption({ collation: e.target.value || null })} />
+                      {!isNew && charsetChanged(orig, draft) && (
+                        <div className="full convert">
+                          <label>
+                            <input type="radio" checked={draft.options.convert} onChange={() => setOption({ convert: true })} /> 기존 데이터도 변환 (CONVERT TO, 테이블을 다시 씀)
+                          </label>
+                          <label>
+                            <input type="radio" checked={!draft.options.convert} onChange={() => setOption({ convert: false })} /> 기본값만 변경 (새로 만드는 컬럼에만 적용)
+                          </label>
+                        </div>
+                      )}
+                      <label>ROW_FORMAT</label>
+                      <input list="row-formats" value={draft.options.row_format ?? ""} disabled={ro} placeholder="기본" onChange={(e) => setOption({ row_format: e.target.value || null })} />
+                    </>
+                  )}
+                  <label>코멘트</label>
+                  <input className="wide" value={draft.options.comment ?? ""} disabled={ro} onChange={(e) => setOption({ comment: e.target.value || null })} />
+                  {!ro && optionsChanged(orig, draft) && (
+                    <div className="full">
+                      <button className="icon" title="되돌리기" onClick={() => edit((d) => ({ ...d, options: { ...orig.options } }))}>
+                        ↺ 옵션 되돌리기
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <datalist id="row-formats">
+                  {["DYNAMIC", "COMPACT", "REDUNDANT", "COMPRESSED"].map((r) => (
+                    <option key={r} value={r} />
+                  ))}
+                </datalist>
+              </Section>
+            )}
           </>
         )}
       </div>

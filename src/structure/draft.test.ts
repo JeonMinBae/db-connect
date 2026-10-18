@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ColumnDef, TableStructure } from "../api/types";
-import { changeCount, changedFields, draftChangeCount, draftOf, entryState, moveRow, newEntry, newRow, orderChanged, parseList, removeEntry, renameColumnRefs, revertEntry, revertRow, rowState, rowsOf, toDraft, toStructure } from "./draft";
+import { changeCount, changedFields, charsetChanged, optionsChanged, draftChangeCount, draftOf, entryState, moveRow, newEntry, newRow, orderChanged, parseList, removeEntry, renameColumnRefs, revertEntry, revertRow, rowState, rowsOf, toDraft, toStructure } from "./draft";
 
 const col = (name: string, full_type = "int"): ColumnDef => ({
   orig_name: name,
@@ -15,7 +15,7 @@ const col = (name: string, full_type = "int"): ColumnDef => ({
   collation: null,
   on_update: null,
 });
-const s: TableStructure = { columns: [col("id"), col("name", "text"), col("qty")], primary_key: ["id"], primary_key_name: null, indexes: [], foreign_keys: [], checks: [], checks_unsupported: false };
+const s: TableStructure = { columns: [col("id"), col("name", "text"), col("qty")], primary_key: ["id"], primary_key_name: null, indexes: [], foreign_keys: [], checks: [], checks_unsupported: false, options: { comment: null, engine: null, charset: null, collation: null, row_format: null, convert: false } };
 
 describe("structure draft", () => {
   it("행 상태: 추가/삭제/수정/이름 변경", () => {
@@ -118,5 +118,18 @@ describe("indexes and constraints draft", () => {
     expect(out.indexes).toEqual([]);
     expect(out.foreign_keys).toHaveLength(1);
     expect(parseList(" a, ,b ,")).toEqual(["a", "b"]);
+  });
+});
+
+describe("table options draft", () => {
+  it("빈 문자열은 없음, convert는 변경이 아님", () => {
+    const d = draftOf(s);
+    d.options = { ...d.options, comment: "  ", convert: true };
+    expect(optionsChanged(s, d)).toBe(false);
+    d.options = { ...d.options, charset: "utf8mb4" };
+    expect(optionsChanged(s, d)).toBe(true);
+    expect(charsetChanged(s, d)).toBe(true);
+    expect(draftChangeCount(s, d)).toBe(1);
+    expect(toStructure(s, d).options.charset).toBe("utf8mb4");
   });
 });

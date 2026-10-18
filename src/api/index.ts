@@ -26,7 +26,7 @@ export interface RawStmt {
   /** UPDATE/DELETE: 정확히 1행에 영향을 줘야 한다 */
   expect_one: boolean;
 }
-import type { AppError, ColumnMeta, ConnectionConfig, DdlPlan, ExecResult, IndexInfo, SnapshotTable, TableInfo, TableStructure } from "./types";
+import type { AppError, ColumnMeta, ConnectionConfig, DdlChoices, DdlPlan, ExecResult, IndexInfo, SnapshotTable, TableInfo, TableStructure } from "./types";
 
 /** 파일 경로는 넘기지 않는다. 백엔드가 대화상자로 고른다. */
 export interface BlobReq {
@@ -98,6 +98,7 @@ export const api = {
   previewDdl: (connId: string, schema: string, table: string, original: TableStructure | null, draft: TableStructure, newName: string | null) =>
     invoke<DdlPlan>("preview_ddl", { connId, schema, table, original, draft, newName }),
   previewDrop: (connId: string, schema: string, table: string) => invoke<{ sql: string; destructive: boolean }>("preview_drop", { connId, schema, table }),
+  ddlChoices: (connId: string) => invoke<DdlChoices>("ddl_choices", { connId }),
   /** 콘솔 트랜잭션과 무관한 자동 커밋 연결에서 실행 */
   applyDdl: (connId: string, statements: string[]) => invoke<void>("apply_ddl", { connId, statements }),
 
