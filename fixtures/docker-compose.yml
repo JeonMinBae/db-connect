@@ -1,0 +1,37 @@
+name: db-connect-fixtures
+services:
+  pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dbc
+      POSTGRES_PASSWORD: dbc
+      POSTGRES_DB: sample
+    ports: ["55432:5432"]
+    volumes:
+      - ./pg:/docker-entrypoint-initdb.d:ro
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: dbc
+      MYSQL_PASSWORD: dbc
+      MYSQL_DATABASE: sample
+    ports: ["53306:3306"]
+    volumes:
+      - ./mysql:/docker-entrypoint-initdb.d:ro
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--requirepass", "dbc"]
+    ports: ["56379:6379"]
+  # 트랜잭션 검증을 위해 노드 1개짜리 레플리카셋으로 띄운다 (standalone 동작은 mongo-standalone으로)
+  mongo:
+    image: mongo:7.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports: ["57017:27017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27017' }] }).ok }"]
+      interval: 5s
+      retries: 20
+  mongo-standalone:
+    image: mongo:7.0
+    ports: ["57018:27017"]

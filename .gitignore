@@ -1,0 +1,33 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 테스트 DB
+fixtures/*.db
+
+# 툴체인 확인용 임시 크레이트 (별도 git 저장소)
+/hello/
+
+# 이 PC 전용 빌드 출력 경로 (C: 드라이브 공간 부족으로 E:에 둠)
+/src-tauri/.cargo/config.toml
