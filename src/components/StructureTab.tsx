@@ -90,24 +90,46 @@ function Section(props: { title: string; onAdd?: () => void; addLabel?: string; 
 }
 
 /** 테이블 구조 탭: 컬럼 · 기본키 · 인덱스 · 외래 키 · CHECK */
-export const StructureTab = memo(function StructureTab(props: { tabId: string; cfg: SqlConfig; schema: string; table: string; scheme: Scheme; active: boolean }) {
-  const { cfg, schema, table } = props;
+const EMPTY: TableStructure = { columns: [], primary_key: [], primary_key_name: null, indexes: [], foreign_keys: [], checks: [], checks_unsupported: false };
+
+export const StructureTab = memo(function StructureTab(props: {
+  tabId: string;
+  cfg: SqlConfig;
+  schema: string;
+  table: string;
+  /** 아직 만들지 않은 새 테이블 */
+  isNew?: boolean;
+  scheme: Scheme;
+  active: boolean;
+}) {
+  const { cfg, schema, table, isNew } = props;
   const [orig, setOrig] = useState<TableStructure | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [name, setName] = useState(table);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TableStructure | null>(null);
   const [loaded, setLoaded] = useState(false);
   const ro = cfg.read_only;
   const reorder = canReorder(cfg.driver) && !ro;
-  const count = orig && draft ? draftChangeCount(orig, draft) : 0;
+  const renamed = !isNew && name.trim() !== table;
+  const count = orig && draft ? draftChangeCount(orig, draft) + (renamed ? 1 : 0) : 0;
 
-  const load = async () => {
+  const load = async (t = table) => {
     if (!(await useConnections.getState().connect(cfg.id))) return;
+    if (isNew && !t) {
+      const d = draftOf(EMPTY);
+      const id = newRow();
+      id.col = { ...id.col, name: "id", full_type: cfg.driver === "postgres" ? "bigint" : cfg.driver === "mysql" ? "bigint" : "INTEGER", nullable: false, auto_increment: true };
+      setOrig(EMPTY);
+      setDraft({ ...d, columns: [id], pk: ["id"] });
+      return;
+    }
     try {
-      const s = await api.tableStructure(cfg.id, schema, table);
-      if (!s.columns.length) throw new Error(`테이블 ${schema}.${table}을(를) 찾을 수 없습니다.`);
+      const s = await api.tableStructure(cfg.id, schema, t);
+      if (!s.columns.length) throw new Error(`테이블 ${schema}.${t}을(를) 찾을 수 없습니다.`);
       setOrig(s);
       setDraft(draftOf(s));
+      setName(t);
       setError(null);
     } catch (e) {
       setError(errorMessage(e));
@@ -144,21 +166,25 @@ export const StructureTab = memo(function StructureTab(props: { tabId: string; c
 
   const startApply = async () => {
     if (!orig || !draft) return;
-    const { tabs, dirty, activate } = useTabs.getState();
-    const pending = tabs.find((t) => t.kind === "table" && t.connId === cfg.id && t.schema === schema && t.table === table && dirty[t.id]?.edit);
+    if (!name.trim()) return toast("테이블 이름을 입력하세요.", "error");
+    const pending = isNew ? undefined : useTabs.getState().pendingFor(cfg.id, schema, table, props.tabId);
     if (pending) {
       toast("같은 테이블의 데이터 탭에 제출하지 않은 변경이 있습니다. 먼저 제출하거나 취소하세요.", "error");
-      activate(pending.id);
+      useTabs.getState().activate(pending.id);
       return;
     }
     if (!(await useConnections.getState().connect(cfg.id))) return;
     setPreview(toStructure(orig, draft));
   };
 
-  /** 구조가 바뀌었다: 다시 읽고 트리·자동완성·데이터 탭에 알린다 */
+  /** 구조가 바뀌었다: 탭 대상 이름을 맞추고, 다시 읽고, 트리·자동완성·데이터 탭에 알린다 */
   const changed = async () => {
-    await load();
-    await useTree.getState().structureChanged(cfg.id, schema, table);
+    const now = isNew || renamed ? name.trim() : table;
+    if (isNew) useTabs.getState().createdTable(props.tabId, now);
+    else if (renamed) useTabs.getState().renameTable(cfg.id, schema, table, now);
+    if (isNew || renamed) await useTree.getState().loadTables(cfg.id, schema, true);
+    await load(now);
+    await useTree.getState().structureChanged(cfg.id, schema, now);
     await useConnections.getState().refreshSnapshot(cfg.id);
   };
 
@@ -171,12 +197,29 @@ export const StructureTab = memo(function StructureTab(props: { tabId: string; c
   return (
     <>
       <div className="toolbar">
-        <button className="icon" title="다시 읽기" onClick={() => void reload()}>
-          ⟳
-        </button>
+        {!isNew && (
+          <button className="icon" title="다시 읽기" onClick={() => void reload()}>
+            ⟳
+          </button>
+        )}
+        <span className="label">테이블</span>
+        <input
+          className={`table-name${renamed ? " changed" : ""}`}
+          value={name}
+          disabled={ro}
+          placeholder="새 테이블 이름"
+          onChange={(e) => setName(e.target.value)}
+        />
         {!ro && (
           <>
-            <button disabled={!count} onClick={() => orig && setDraft(draftOf(orig))}>
+            <button
+              disabled={!count || !!isNew}
+              onClick={() => {
+                if (!orig) return;
+                setDraft(draftOf(orig));
+                setName(table);
+              }}
+            >
               모두 되돌리기
             </button>
             <button className="primary" disabled={!count} onClick={() => void startApply()}>
@@ -186,9 +229,7 @@ export const StructureTab = memo(function StructureTab(props: { tabId: string; c
         )}
         {count > 0 && <span className="label">{count}개 변경{reordered ? " (순서 포함)" : ""}</span>}
         <span className="spacer" />
-        <span className="label">
-          {schema}.{table}
-        </span>
+        <span className="label">{schema}</span>
         {ro && <span className="badge">READ ONLY</span>}
         <span className="label">{cfg.name}</span>
       </div>
@@ -488,9 +529,10 @@ export const StructureTab = memo(function StructureTab(props: { tabId: string; c
           cfg={cfg}
           scheme={props.scheme}
           schema={schema}
-          table={table}
-          original={orig}
+          table={isNew ? name.trim() : table}
+          original={isNew ? null : orig}
           draft={preview}
+          newName={isNew ? null : name.trim()}
           onClose={() => setPreview(null)}
           onPartial={() => void changed()}
           onDone={() => {

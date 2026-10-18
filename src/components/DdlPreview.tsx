@@ -15,8 +15,11 @@ export function DdlPreview(props: {
   scheme: Scheme;
   schema: string;
   table: string;
-  original: TableStructure;
+  /** null이면 새 테이블 */
+  original: TableStructure | null;
   draft: TableStructure;
+  /** 바꿀 테이블 이름 (같으면 무시) */
+  newName: string | null;
   onDone: () => void;
   /** MySQL에서 일부 문장만 반영된 채 실패함 (구조를 다시 읽어야 한다) */
   onPartial: () => void;
@@ -32,7 +35,7 @@ export function DdlPreview(props: {
 
   useEffect(() => {
     api
-      .previewDdl(cfg.id, props.schema, props.table, props.original, props.draft)
+      .previewDdl(cfg.id, props.schema, props.table, props.original, props.draft, props.newName)
       .then((p) => {
         setPlan(p);
         setOriginal(p.statements.map((s) => s.sql + ";").join("\n\n"));

@@ -1466,7 +1466,7 @@ StructureTab.onApply
 
 ---
 
-### S3. 테이블 생성 · 삭제 · 이름 변경
+### S3. 테이블 생성 · 삭제 · 이름 변경 ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: "새 테이블"은 스키마 노드와 tables 폴더 우클릭. 이름 변경은 구조 탭 위쪽 테이블 이름 칸에서 하고, 다른 변경 뒤 마지막 문장으로 붙인다. SQLite는 재생성일 때만 foreign_keys를 끄고 legacy_alter_table을 켠다(이름 변경이 다른 테이블의 외래 키·뷰·트리거까지 고치도록). 삭제는 `preview_drop`으로 만든 SQL을 보여 준다)
 
 **작업 내용**
 - "새 테이블"

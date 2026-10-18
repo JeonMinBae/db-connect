@@ -5,7 +5,8 @@ import { confirmDialog } from "./ui";
 export type Tab =
   | { kind: "console"; id: string; connId: string; title: string }
   | { kind: "table"; id: string; connId: string; schema: string; table: string; title: string }
-  | { kind: "structure"; id: string; connId: string; schema: string; table: string; title: string }
+  /** isNew: 아직 만들지 않은 새 테이블 (table은 빈 문자열) */
+  | { kind: "structure"; id: string; connId: string; schema: string; table: string; title: string; isNew?: boolean }
   /** key: 텍스트 키 이름, 바이너리 키는 redis-cli 이스케이프 표기 (binary: true) */
   | { kind: "redisKey"; id: string; connId: string; db: number; key: string; binary?: boolean; title: string }
   | { kind: "mongoColl"; id: string; connId: string; db: string; coll: string; title: string };
@@ -24,6 +25,15 @@ interface TabsState {
   openConsole: (connId: string, connName: string, forceNew?: boolean) => void;
   openTable: (connId: string, schema: string, table: string) => void;
   openStructure: (connId: string, schema: string, table: string) => void;
+  openNewTable: (connId: string, schema: string) => void;
+  /** 새 테이블 탭을 만든 테이블의 구조 탭으로 바꾼다 */
+  createdTable: (tabId: string, table: string) => void;
+  /** 이름이 바뀐 테이블의 데이터·구조 탭을 새 이름으로 */
+  renameTable: (connId: string, schema: string, from: string, to: string) => void;
+  /** 삭제한 테이블의 탭을 확인 없이 닫는다 */
+  closeTable: (connId: string, schema: string, table: string) => void;
+  /** 이 테이블의 데이터·구조 탭 중 제출하지 않은 편집이 있는 탭 (except 제외) */
+  pendingFor: (connId: string, schema: string, table: string, except?: string) => Tab | undefined;
   openRedisKey: (connId: string, db: number, key: string, binary?: boolean) => void;
   openMongoColl: (connId: string, db: string, coll: string) => void;
   renameRedisKey: (connId: string, db: number, key: string, newKey: string | null) => void;
@@ -109,6 +119,36 @@ export const useTabs = create<TabsState>((set, get) => {
       set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
       persist(get());
     },
+
+    openNewTable: (connId, schema) => {
+      const tab: Tab = { kind: "structure", id: newId(), connId, schema, table: "", title: "새 테이블", isNew: true };
+      set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+      persist(get());
+    },
+
+    createdTable: (tabId, table) => {
+      set((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId && t.kind === "structure" ? { ...t, table, title: `${table} 구조`, isNew: false } : t)) }));
+      persist(get());
+    },
+
+    renameTable: (connId, schema, from, to) => {
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === from
+            ? { ...t, table: to, title: t.kind === "table" ? to : `${to} 구조` }
+            : t,
+        ),
+      }));
+      persist(get());
+    },
+
+    closeTable: (connId, schema, table) =>
+      removeTabs(get().tabs.filter((t) => (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === table).map((t) => t.id)),
+
+    pendingFor: (connId, schema, table, except) =>
+      get().tabs.find(
+        (t) => t.id !== except && (t.kind === "table" || t.kind === "structure") && t.connId === connId && t.schema === schema && t.table === table && get().dirty[t.id]?.edit,
+      ),
 
     openRedisKey: (connId, db, key, binary) => {
       const existing = get().tabs.find((t) => t.kind === "redisKey" && t.connId === connId && t.db === db && t.key === key);

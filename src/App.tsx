@@ -7,6 +7,7 @@ import { RedisKeyTab } from "./components/RedisKeyTab";
 import { Sidebar } from "./components/Sidebar";
 import { TableViewTab } from "./components/TableViewTab";
 import { StructureTab } from "./components/StructureTab";
+import { DropTableHost } from "./components/DropTableDialog";
 import { ExportProgressHost } from "./components/exportMenu";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
@@ -25,7 +26,7 @@ function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionCon
     const sql = cfg as SqlConfig;
     if (t.kind === "console") return <ConsoleTab tabId={t.id} cfg={sql} scheme={scheme} active={active} />;
     if (t.kind === "table") return <TableViewTab tabId={t.id} cfg={sql} schema={t.schema} table={t.table} scheme={scheme} active={active} />;
-    if (t.kind === "structure") return <StructureTab tabId={t.id} cfg={sql} schema={t.schema} table={t.table} scheme={scheme} active={active} />;
+    if (t.kind === "structure") return <StructureTab tabId={t.id} cfg={sql} schema={t.schema} table={t.table} isNew={t.isNew} scheme={scheme} active={active} />;
   }
   if (cfg.driver === "redis") {
     if (t.kind === "console") return <RedisConsoleTab tabId={t.id} cfg={cfg} scheme={scheme} active={active} />;
@@ -134,6 +135,7 @@ export default function App() {
       <ContextMenuHost />
       <ConfirmHost />
       <PromptHost />
+      <DropTableHost />
       <ExportProgressHost />
       <Toasts />
     </div>

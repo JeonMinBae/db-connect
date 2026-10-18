@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { isSql, type ConnectionConfig } from "../api/types";
+import { isSql, type ConnectionConfig, type SqlConfig } from "../api/types";
+import { openDropTable } from "./DropTableDialog";
 import { MongoTree, refreshMongoTree } from "./MongoTree";
 import { RedisTree, refreshRedisTree } from "./RedisTree";
 import { confirmLeave, useConnections } from "../store/connections";
@@ -12,6 +13,8 @@ import { blankConfig, ConnectionDialog } from "./dialogs/ConnectionDialog";
 import { showContextMenu } from "./ui";
 
 const FILTER_THRESHOLD = 2000;
+
+const readOnly = (connId: string) => !!useConnections.getState().configs.find((c) => c.id === connId)?.read_only;
 
 export function Sidebar() {
   const configs = useConnections((s) => s.configs);
@@ -156,7 +159,12 @@ function SchemaNode({ connId, schema }: { connId: string; schema: string }) {
           toggle(k);
           if (!open) void loadTables(connId, schema);
         }}
-        onContextMenu={(e) => showContextMenu(e, [{ label: "새로고침", onClick: () => void loadTables(connId, schema, true) }])}
+        onContextMenu={(e) =>
+          showContextMenu(e, [
+            { label: "새 테이블…", disabled: readOnly(connId), onClick: () => useTabs.getState().openNewTable(connId, schema) },
+            { label: "새로고침", onClick: () => void loadTables(connId, schema, true) },
+          ])
+        }
       >
         <span>🗂</span>
         <span>{schema}</span>
@@ -201,7 +209,16 @@ function Folder(props: { connId: string; schema: string; label: string; items: {
   const open = useTree((s) => s.expanded[k] ?? props.label === "tables");
   return (
     <>
-      <Row depth={props.depth} open={open} onToggle={() => useTree.getState().toggle(k, !open)}>
+      <Row
+        depth={props.depth}
+        open={open}
+        onToggle={() => useTree.getState().toggle(k, !open)}
+        onContextMenu={
+          props.label === "tables"
+            ? (e) => showContextMenu(e, [{ label: "새 테이블…", disabled: readOnly(props.connId), onClick: () => useTabs.getState().openNewTable(props.connId, props.schema) }])
+            : undefined
+        }
+      >
         <span>📁</span>
         <span>{props.label}</span>
         <span className="type">{props.items.length}</span>
@@ -233,6 +250,14 @@ function TableNode(props: { connId: string; schema: string; table: string; isVie
           showContextMenu(e, [
             { label: "데이터 열기", onClick: openTable },
             { label: "구조 편집", disabled: props.isView, onClick: () => useTabs.getState().openStructure(connId, schema, table) },
+            {
+              label: "테이블 삭제…",
+              disabled: props.isView || readOnly(connId),
+              onClick: () => {
+                const cfg = useConnections.getState().configs.find((c) => c.id === connId);
+                if (cfg && isSql(cfg.driver)) void openDropTable(cfg as SqlConfig, schema, table);
+              },
+            },
             {
               label: "새로고침",
               onClick: () => {

@@ -35,6 +35,7 @@ pub fn run() {
             commands::exec::tx_action,
             commands::ddl::table_structure,
             commands::ddl::preview_ddl,
+            commands::ddl::preview_drop,
             commands::ddl::apply_ddl,
             commands::edit::submit_changes,
             commands::edit::preview_changes,

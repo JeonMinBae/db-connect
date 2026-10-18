@@ -94,9 +94,10 @@ export const api = {
 
   // 구조 편집
   tableStructure: (connId: string, schema: string, table: string) => invoke<TableStructure>("table_structure", { connId, schema, table }),
-  /** 그사이 다른 곳에서 구조가 바뀌었으면 오류 */
-  previewDdl: (connId: string, schema: string, table: string, original: TableStructure, draft: TableStructure) =>
-    invoke<DdlPlan>("preview_ddl", { connId, schema, table, original, draft }),
+  /** original이 null이면 새 테이블(table이 새 이름). 그사이 다른 곳에서 구조가 바뀌었으면 오류 */
+  previewDdl: (connId: string, schema: string, table: string, original: TableStructure | null, draft: TableStructure, newName: string | null) =>
+    invoke<DdlPlan>("preview_ddl", { connId, schema, table, original, draft, newName }),
+  previewDrop: (connId: string, schema: string, table: string) => invoke<{ sql: string; destructive: boolean }>("preview_drop", { connId, schema, table }),
   /** 콘솔 트랜잭션과 무관한 자동 커밋 연결에서 실행 */
   applyDdl: (connId: string, statements: string[]) => invoke<void>("apply_ddl", { connId, statements }),
 
