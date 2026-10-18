@@ -1438,7 +1438,7 @@ StructureTab.onApply
 
 ---
 
-### S2. 인덱스 · 제약 (PK / UNIQUE / FK / CHECK) ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: 바뀐 인덱스·제약은 지우고 다시 만든다. 컬럼 이름을 바꾸면 프론트가 기본키·인덱스·외래 키의 컬럼 목록을 함께 바꾸고, 백엔드는 원래 목록을 새 이름으로 옮겨 비교한다. 삭제한 컬럼을 쓰는 항목이 남아 있으면 거부. 식·부분 인덱스는 보존·삭제만. MySQL은 같은 이름의 외래 키를 다시 만들 때만 DROP FOREIGN KEY를 앞 문장으로 나눈다. SQLite CHECK는 CREATE 문을 파싱한다)
+### S2. 인덱스 · 제약 (PK / UNIQUE / FK / CHECK) ✅ (SQLite 검증 완료 · 실제 앱에서 SQLite로 확인 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: 바뀐 인덱스·제약은 지우고 다시 만든다. 컬럼 이름을 바꾸면 프론트가 기본키·인덱스·외래 키의 컬럼 목록을 함께 바꾸고, 백엔드는 원래 목록을 새 이름으로 옮겨 비교한다. 삭제한 컬럼을 쓰는 항목이 남아 있으면 거부. 식·부분 인덱스는 보존·삭제만. MySQL은 같은 이름의 외래 키를 다시 만들 때만 DROP FOREIGN KEY를 앞 문장으로 나눈다. SQLite CHECK는 CREATE 문을 파싱한다)
 
 **작업 내용**
 - `table_structure`에 `indexes`, `foreign_keys`, `checks`를 채운다.
@@ -1466,7 +1466,7 @@ StructureTab.onApply
 
 ---
 
-### S3. 테이블 생성 · 삭제 · 이름 변경 ✅ (SQLite 검증 완료 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: "새 테이블"은 스키마 노드와 tables 폴더 우클릭. 이름 변경은 구조 탭 위쪽 테이블 이름 칸에서 하고, 다른 변경 뒤 마지막 문장으로 붙인다. SQLite는 재생성일 때만 foreign_keys를 끄고 legacy_alter_table을 켠다(이름 변경이 다른 테이블의 외래 키·뷰·트리거까지 고치도록). 삭제는 `preview_drop`으로 만든 SQL을 보여 준다)
+### S3. 테이블 생성 · 삭제 · 이름 변경 ✅ (SQLite 검증 완료 · 실제 앱에서 SQLite로 생성·이름 변경·삭제 확인 · PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: "새 테이블"은 스키마 노드와 tables 폴더 우클릭. 이름 변경은 구조 탭 위쪽 테이블 이름 칸에서 하고, 다른 변경 뒤 마지막 문장으로 붙인다. SQLite는 재생성일 때만 foreign_keys를 끄고 legacy_alter_table을 켠다(이름 변경이 다른 테이블의 외래 키·뷰·트리거까지 고치도록). 삭제는 `preview_drop`으로 만든 SQL을 보여 준다)
 
 **작업 내용**
 - "새 테이블"
@@ -1488,7 +1488,7 @@ StructureTab.onApply
 
 ---
 
-### S4. 문자셋 · 정렬규칙 · 코멘트 · 테이블 옵션 ✅ (PG/MySQL은 SQL 스냅샷만, 서버 검증은 Docker 준비 후. 구현 메모: 선택 목록은 `ddl_choices` 커맨드로 탭마다 한 번 읽어 datalist로 제안하고 자유 입력도 받는다. 문자셋 없이 정렬규칙만 바꾸면 거부. 옵션 변경은 MySQL ALTER 한 문장 끝에 붙인다)
+### S4. 문자셋 · 정렬규칙 · 코멘트 · 테이블 옵션 ✅ (PG/MySQL은 SQL 스냅샷만 · 옵션 화면은 PG/MySQL 전용이라 앱 화면 확인 전, 서버 검증은 Docker 준비 후. 구현 메모: 선택 목록은 `ddl_choices` 커맨드로 탭마다 한 번 읽어 datalist로 제안하고 자유 입력도 받는다. 문자셋 없이 정렬규칙만 바꾸면 거부. 옵션 변경은 MySQL ALTER 한 문장 끝에 붙인다)
 
 **작업 내용**
 - 조회

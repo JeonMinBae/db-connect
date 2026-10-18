@@ -398,7 +398,7 @@ export const StructureTab = memo(function StructureTab(props: {
                       <ListInput value={draft.pk} disabled={ro} placeholder="없음 (컬럼, 컬럼…)" list={colNames} onChange={(pk) => edit((d) => ({ ...d, pk }))} />
                     </td>
                     <td className="nowrap">
-                      {!ro && pkChanged(orig, draft) && (
+                      {!ro && !isNew && pkChanged(orig, draft) && (
                         <button className="icon" title="되돌리기" onClick={() => edit((d) => ({ ...d, pk: [...orig.primary_key] }))}>
                           ↺
                         </button>
