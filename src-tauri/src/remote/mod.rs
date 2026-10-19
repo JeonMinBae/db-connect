@@ -1,5 +1,6 @@
 //! 원격 파일 접속 공통 계층. 프로토콜별 세션은 `Session` enum 으로 디스패치한다.
 pub mod known_hosts;
+pub mod ops;
 pub mod path;
 pub mod sftp;
 #[cfg(test)]
@@ -56,6 +57,36 @@ impl Session {
     pub async fn stat(&mut self, path: &str) -> AppResult<Option<(Entry, Stamp)>> {
         match self {
             Self::Sftp(s) => s.stat(path).await,
+        }
+    }
+
+    pub async fn mkdir(&mut self, path: &str) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.mkdir(path).await,
+        }
+    }
+
+    pub async fn rename(&mut self, from: &str, to: &str) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.rename(from, to).await,
+        }
+    }
+
+    pub async fn remove_file(&mut self, path: &str) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.remove_file(path).await,
+        }
+    }
+
+    pub async fn remove_dir(&mut self, path: &str) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.remove_dir(path).await,
+        }
+    }
+
+    pub async fn is_link(&mut self, path: &str) -> AppResult<bool> {
+        match self {
+            Self::Sftp(s) => s.is_link(path).await,
         }
     }
 }

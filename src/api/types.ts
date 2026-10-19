@@ -201,3 +201,12 @@ export interface DdlPlan {
   warnings: string[];
   notes: string[];
 }
+
+/** 원격 파일 서버의 목록 항목 (mtime 은 epoch ms) */
+export interface RemoteEntry {
+  name: string;
+  dir: boolean;
+  size: number;
+  mtime: number | null;
+  perm: number | null;
+}

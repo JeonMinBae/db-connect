@@ -147,6 +147,27 @@ impl SftpSession {
             Err(e) => Err(sftp_err(e)),
         }
     }
+
+    pub async fn mkdir(&mut self, p: &str) -> AppResult<()> {
+        self.sftp.create_dir(path::normalize(p)).await.map_err(sftp_err)
+    }
+
+    pub async fn rename(&mut self, from: &str, to: &str) -> AppResult<()> {
+        self.sftp.rename(path::normalize(from), path::normalize(to)).await.map_err(sftp_err)
+    }
+
+    pub async fn remove_file(&mut self, p: &str) -> AppResult<()> {
+        self.sftp.remove_file(path::normalize(p)).await.map_err(sftp_err)
+    }
+
+    pub async fn remove_dir(&mut self, p: &str) -> AppResult<()> {
+        self.sftp.remove_dir(path::normalize(p)).await.map_err(sftp_err)
+    }
+
+    /// stat 은 링크를 따라가므로, 재귀 삭제가 링크 대상 안으로 들어가지 않게 따로 확인한다
+    pub async fn is_link(&mut self, p: &str) -> AppResult<bool> {
+        Ok(self.sftp.symlink_metadata(path::normalize(p)).await.map_err(sftp_err)?.is_symlink())
+    }
 }
 
 fn entry_of(name: String, m: &russh_sftp::protocol::FileAttributes) -> Entry {

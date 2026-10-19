@@ -26,7 +26,7 @@ export interface RawStmt {
   /** UPDATE/DELETE: 정확히 1행에 영향을 줘야 한다 */
   expect_one: boolean;
 }
-import type { AppError, ColumnMeta, ConnectionConfig, DdlChoices, DdlPlan, ExecResult, IndexInfo, SnapshotTable, TableInfo, TableStructure } from "./types";
+import type { AppError, ColumnMeta, ConnectionConfig, DdlChoices, DdlPlan, ExecResult, IndexInfo, RemoteEntry, SnapshotTable, TableInfo, TableStructure } from "./types";
 
 /** 파일 경로는 넘기지 않는다. 백엔드가 대화상자로 고른다. */
 export interface BlobReq {
@@ -59,6 +59,10 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   remoteTrustHost: (host: string, port: number, fingerprint: string) => invoke<void>("remote_trust_host", { host, port, fingerprint }),
   pickKeyFile: () => invoke<string | null>("pick_key_file"),
+  remoteList: (connId: string, path: string) => invoke<RemoteEntry[]>("remote_list", { connId, path }),
+  remoteMkdir: (connId: string, path: string) => invoke<void>("remote_mkdir", { connId, path }),
+  remoteRename: (connId: string, from: string, to: string) => invoke<void>("remote_rename", { connId, from, to }),
+  remoteDelete: (connId: string, paths: string[]) => invoke<number>("remote_delete", { connId, paths }),
 
   // 메타데이터
   listSchemas: (connId: string) => invoke<string[]>("list_schemas", { connId }),
