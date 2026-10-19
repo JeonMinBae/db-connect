@@ -1,13 +1,16 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use russh::keys::{self, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::StatusCode;
 
 use super::known_hosts::{self, Verdict};
+use super::io::Counting;
 use super::{path, Entry, Stamp};
 use crate::error::{AppError, AppResult};
 use crate::store::config::ConnectionConfig;
@@ -167,6 +170,22 @@ impl SftpSession {
     /// stat 은 링크를 따라가므로, 재귀 삭제가 링크 대상 안으로 들어가지 않게 따로 확인한다
     pub async fn is_link(&mut self, p: &str) -> AppResult<bool> {
         Ok(self.sftp.symlink_metadata(path::normalize(p)).await.map_err(sftp_err)?.is_symlink())
+    }
+
+    /// 원격 파일을 만들어(있으면 덮어씀) 채운다. len 은 서버에 미리 알릴 방법이 없어 쓰지 않는다.
+    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, _len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+        let mut f = self.sftp.create(path::normalize(p)).await.map_err(sftp_err)?;
+        let mut r = Counting::new(reader, counter);
+        tokio::io::copy(&mut r, &mut f).await.map_err(|e| AppError::Remote(e.to_string()))?;
+        // shutdown 이 핸들을 닫아야 서버에 데이터가 확정된다
+        f.shutdown().await.map_err(|e| AppError::Remote(e.to_string()))
+    }
+
+    pub async fn download(&mut self, p: &str, writer: impl AsyncWrite + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
+        let mut f = self.sftp.open(path::normalize(p)).await.map_err(sftp_err)?;
+        let mut w = Counting::new(writer, counter);
+        tokio::io::copy(&mut f, &mut w).await.map_err(|e| AppError::Remote(e.to_string()))?;
+        w.flush().await.map_err(|e| AppError::Remote(e.to_string()))
     }
 }
 

@@ -42,6 +42,11 @@ export interface BlobReq {
 /** 대화상자를 취소하면 null */
 /** 로컬 경로 토큰: 전체 경로는 백엔드에만 있고 웹뷰는 id 와 이름만 안다 */
 export type Pick = { pick_id: string; names: string[] };
+export type TransferJob = { kind: "upload"; pick_id: string; dest_dir: string } | { kind: "download"; paths: string[]; pick_id: string };
+export type TransferAnswer = { choice: "overwrite" | "skip" | "rename"; all: boolean };
+export type TransferProgress = { job_id: string; file: string; done_bytes: number; total_bytes: number; done_files: number; total_files: number };
+export type TransferConflict = { job_id: string; ask_id: string; path: string; dir: boolean };
+export type TransferDone = { files: number; bytes: number; skipped: number };
 export type FileResult = { path: string; bytes: number } | null;
 
 export function errorMessage(e: unknown): string {
@@ -70,6 +75,8 @@ export const api = {
   remoteMkdir: (connId: string, path: string) => invoke<void>("remote_mkdir", { connId, path }),
   remoteRename: (connId: string, from: string, to: string) => invoke<void>("remote_rename", { connId, from, to }),
   remoteDelete: (connId: string, paths: string[]) => invoke<number>("remote_delete", { connId, paths }),
+  transferStart: (connId: string, jobId: string, job: TransferJob) => invoke<TransferDone>("transfer_start", { connId, jobId, job }),
+  transferAnswer: (askId: string, answer: TransferAnswer) => invoke<void>("transfer_answer", { askId, answer }),
 
   // 메타데이터
   listSchemas: (connId: string) => invoke<string[]>("list_schemas", { connId }),

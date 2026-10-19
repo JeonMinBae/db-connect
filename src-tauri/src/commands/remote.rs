@@ -1,8 +1,11 @@
-use tauri::{AppHandle, State};
+use std::sync::Arc;
+
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::edit::{pick_files, pick_folder, pick_path};
 use crate::error::{AppError, AppResult};
 use crate::remote::picks::Pick;
+use crate::remote::transfer::{self, Answer, Env, Job, Progress, TransferDone};
 use crate::remote::{known_hosts, ops, path, Entry};
 use crate::state::AppState;
 
@@ -104,6 +107,70 @@ pub async fn remote_delete(state: State<'_, AppState>, conn_id: String, paths: V
         })
     })
     .await
+}
+
+/// 질문이 끝나거나(응답) 중지돼 future 가 버려질 때 대기열에서 지운다
+struct AskGuard {
+    app: AppHandle,
+    id: String,
+}
+
+impl Drop for AskGuard {
+    fn drop(&mut self) {
+        self.app.state::<AppState>().asks.lock().unwrap().remove(&self.id);
+    }
+}
+
+#[derive(serde::Serialize, Clone)]
+struct Conflict<'a> {
+    job_id: &'a str,
+    ask_id: &'a str,
+    path: &'a str,
+    dir: bool,
+}
+
+/// 업로드·다운로드 실행. 중지는 `cancel_query(job_id)`.
+#[tauri::command]
+pub async fn transfer_start(app: AppHandle, state: State<'_, AppState>, conn_id: String, job_id: String, job: Job) -> AppResult<TransferDone> {
+    let r = state.remote(&conn_id).await?;
+    if matches!(job, Job::Upload { .. }) {
+        r.check_write()?;
+    }
+    let local = state.picks.get(job.pick_id())?;
+    let emit = {
+        let app = app.clone();
+        Arc::new(move |p: Progress| {
+            let _ = app.emit("transfer-progress", p);
+        })
+    };
+    let ask = {
+        let (app, job_id) = (app.clone(), job_id.clone());
+        Arc::new(move |path: String| {
+            let (app, job_id) = (app.clone(), job_id.clone());
+            let fut: futures_util::future::BoxFuture<'static, AppResult<Answer>> = Box::pin(async move {
+                let ask_id = uuid::Uuid::new_v4().simple().to_string();
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                app.state::<AppState>().asks.lock().unwrap().insert(ask_id.clone(), tx);
+                let _guard = AskGuard { app: app.clone(), id: ask_id.clone() };
+                let _ = app.emit("transfer-conflict", Conflict { job_id: &job_id, ask_id: &ask_id, path: &path, dir: false });
+                rx.await.map_err(|_| AppError::user("사용자가 중지했습니다."))
+            });
+            fut
+        })
+    };
+    let env = Env { job_id: job_id.clone(), emit, ask };
+    state
+        .abortable(&job_id, async move {
+            let s = r.session().await?;
+            transfer::run(s, job, local, env).await
+        })
+        .await
+}
+
+#[tauri::command]
+pub fn transfer_answer(state: State<'_, AppState>, ask_id: String, answer: Answer) -> AppResult<()> {
+    let tx = state.asks.lock().unwrap().remove(&ask_id).ok_or_else(|| AppError::user("이미 처리되었거나 중지된 질문입니다."))?;
+    tx.send(answer).map_err(|_| AppError::user("이미 중지된 작업입니다."))
 }
 
 #[cfg(test)]

@@ -80,6 +80,8 @@ pub struct AppState {
     pub remote: RwLock<HashMap<String, Arc<RemoteConn>>>,
     /// 대화상자·드롭으로 고른 로컬 경로 (웹뷰에는 id 만 준다)
     pub picks: PickRegistry,
+    /// 전송 충돌 질문의 응답 대기열 (ask_id -> 송신단). 정리 가드가 Drop 에서 쓰므로 std Mutex.
+    pub asks: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<crate::remote::transfer::Answer>>>,
     /// Redis·MongoDB 실행 중인 작업 (exec_id → 중지 핸들)
     pub aborts: Mutex<HashMap<String, tokio::task::AbortHandle>>,
 }
@@ -95,6 +97,7 @@ impl AppState {
             mongo: RwLock::new(HashMap::new()),
             remote: RwLock::new(HashMap::new()),
             picks: PickRegistry::default(),
+            asks: std::sync::Mutex::new(HashMap::new()),
             aborts: Mutex::new(HashMap::new()),
         }
     }

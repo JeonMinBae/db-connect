@@ -1,17 +1,22 @@
 //! 원격 파일 접속 공통 계층. 프로토콜별 세션은 `Session` enum 으로 디스패치한다.
+pub mod io;
 pub mod known_hosts;
 pub mod ops;
 pub mod path;
 pub mod picks;
 pub mod sftp;
+pub mod transfer;
 #[cfg(test)]
 #[path = "it.rs"]
 mod remote_it;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 
 use crate::error::{AppError, AppResult};
@@ -88,6 +93,18 @@ impl Session {
     pub async fn is_link(&mut self, path: &str) -> AppResult<bool> {
         match self {
             Self::Sftp(s) => s.is_link(path).await,
+        }
+    }
+
+    pub async fn upload(&mut self, path: &str, reader: impl AsyncRead + Unpin + Send, len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.upload(path, reader, len, counter).await,
+        }
+    }
+
+    pub async fn download(&mut self, path: &str, writer: impl AsyncWrite + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.download(path, writer, counter).await,
         }
     }
 }
