@@ -2,11 +2,13 @@ import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
 import { History } from "../../remote/browser";
-import { normalize } from "../../remote/path";
+import { join, normalize } from "../../remote/path";
+import { subscribeDone, useTransfers } from "../../remote/transfers";
 import { toast } from "../../store/ui";
-import { Splitter } from "../ui";
+import { Splitter, showContextMenu } from "../ui";
 import { FileList } from "./FileList";
 import { FolderTree, type FolderTreeHandle } from "./FolderTree";
+import { TransferPanel } from "./TransferPanel";
 
 export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: ConnectionConfig; active: boolean }) {
   const { cfg } = props;
@@ -76,11 +78,56 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
     refresh();
   };
 
-  // 전송 큐가 생기기 전까지의 임시 처리 (Task 8 에서 업로드 등록으로 교체)
-  const dropPick = (pick: Pick) => {
-    toast(`${pick.names.length}개 항목 업로드는 전송 기능에서 처리됩니다`);
-    void api.pickRelease(pick.pick_id).catch(() => {});
+  const enqueueUpload = (pick: Pick) => {
+    const dest = pathRef.current;
+    const what = pick.names.length === 1 ? pick.names[0] : `${pick.names.length}개 항목`;
+    useTransfers.getState().enqueue(props.tabId, cfg.id, `↑ ${what} → ${dest}`, { kind: "upload", pick_id: pick.pick_id, dest_dir: dest });
   };
+
+  const upload = async (dirs: boolean) => {
+    try {
+      const pick = await api.pickUpload(dirs);
+      if (pick) enqueueUpload(pick);
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    }
+  };
+
+  const uploadMenu = (e: React.MouseEvent) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    showContextMenu({ clientX: r.left, clientY: r.bottom }, [
+      { label: "파일…", onClick: () => void upload(false) },
+      { label: "폴더…", onClick: () => void upload(true) },
+    ]);
+  };
+
+  // 선택 1개가 파일이면 저장 파일 대화상자, 그 외에는 폴더 대화상자
+  const download = async (targets: RemoteEntry[]) => {
+    if (!targets.length) return;
+    const single = targets.length === 1 && !targets[0].dir ? targets[0].name : null;
+    try {
+      const pick = await api.pickDownloadTarget(single);
+      if (!pick) return;
+      const label = targets.length === 1 ? targets[0].name : `${targets.length}개 항목`;
+      useTransfers.getState().enqueue(props.tabId, cfg.id, `↓ ${label}`, { kind: "download", paths: targets.map((t) => join(pathRef.current, t.name)), pick_id: pick.pick_id });
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    }
+  };
+
+  // 업로드가 끝나면(일부만 올라간 경우 포함) 대상이 현재 폴더일 때 목록과 트리를 갱신한다
+  const onUploaded = useRef((_dest: string) => {});
+  onUploaded.current = (dest) => {
+    tree.current?.invalidate([dest]);
+    if (normalize(dest) === pathRef.current) void load(pathRef.current);
+  };
+  useEffect(
+    () =>
+      subscribeDone(props.tabId, (it) => {
+        if (it.job.kind === "upload") onUploaded.current(it.job.dest_dir);
+      }),
+    [props.tabId],
+  );
 
   return (
     <>
@@ -107,6 +154,9 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
         <label className="label">
           <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} /> 숨김 파일
         </label>
+        <button onClick={uploadMenu} disabled={cfg.read_only} title={cfg.read_only ? "읽기 전용 접속입니다" : "업로드"}>
+          업로드 ▾
+        </button>
         <input className="remote-filter" placeholder="이름 필터" value={filter} onChange={(e) => setFilter(e.target.value)} />
       </div>
       <div className="remote-body">
@@ -114,10 +164,11 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
           <FolderTree ref={tree} connId={cfg.id} current={path} showHidden={showHidden} onOpen={(p) => void go(p)} />
         </div>
         <Splitter dir="v" size={treeWidth} onResize={setTreeWidth} min={120} max={600} />
-        <FileList cfg={cfg} active={props.active} onDropPick={dropPick} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
+        <FileList cfg={cfg} active={props.active} onDropPick={enqueueUpload} onDownload={(t) => void download(t)} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
       </div>
-      {/* 전송 큐 자리 (Task 8) */}
-      <div className="remote-footer" />
+      <div className="remote-footer">
+        <TransferPanel tabId={props.tabId} />
+      </div>
     </>
   );
 });

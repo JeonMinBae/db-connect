@@ -19,6 +19,8 @@ interface Props {
   /** 쓰기 작업 뒤 호출: 목록 새로고침과 트리 캐시 무효화는 호출자가 한다 */
   onChanged: (affectedDirs: string[]) => void;
   onRefresh: () => void;
+  /** 선택한 항목 다운로드 (저장 위치 선택과 큐 등록은 호출자가 한다) */
+  onDownload: (targets: RemoteEntry[]) => void;
   /** OS 에서 이 목록으로 끌어다 놓은 항목 (소유권이 넘어오므로 받은 쪽이 해제까지 책임진다) */
   onDropPick?: (pick: Pick) => void;
   /** 이 탭이 활성일 때만 드롭을 받는다 */
@@ -148,6 +150,7 @@ export function FileList(props: Props) {
     if (r) items.push({ label: r.dir ? "열기" : "편집기로 열기", onClick: () => open(r) }, "sep");
     items.push({ label: "새 폴더…", onClick: () => void mkdir(), disabled: ro });
     if (r) {
+      items.push({ label: "다운로드…", onClick: () => props.onDownload(targets), disabled: !targets.length });
       items.push({ label: "이름 변경…", onClick: () => void rename(r), disabled: ro || targets.length !== 1 });
       items.push({ label: "삭제…", onClick: () => void remove(targets), disabled: ro });
     }

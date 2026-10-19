@@ -9,6 +9,7 @@ import { TableViewTab } from "./components/TableViewTab";
 import { StructureTab } from "./components/StructureTab";
 import { DropTableHost } from "./components/DropTableDialog";
 import { ExportProgressHost } from "./components/exportMenu";
+import { TransferConflictHost } from "./components/remote/TransferPanel";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
 import { BrowserTab } from "./components/remote/BrowserTab";
@@ -16,6 +17,7 @@ import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "./api/ty
 import { useTabs, type Tab } from "./store/tabs";
 import { useColorScheme, type Scheme } from "./theme";
 import { installDropListener } from "./remote/drops";
+import { installTransferListeners } from "./remote/transfers";
 
 const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤", remoteBrowser: "🗁", remoteFile: "📝" };
 
@@ -76,8 +78,10 @@ export default function App() {
     };
     window.addEventListener("contextmenu", noMenu);
     const uninstallDrop = installDropListener();
+    const uninstallTransfers = installTransferListeners();
     return () => {
       uninstallDrop();
+      uninstallTransfers();
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("contextmenu", noMenu);
     };
@@ -146,6 +150,7 @@ export default function App() {
       <PromptHost />
       <DropTableHost />
       <ExportProgressHost />
+      <TransferConflictHost />
       <Toasts />
     </div>
   );

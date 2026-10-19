@@ -853,6 +853,77 @@ pre.raw-sql {
 .remote-footer:empty {
   display: none;
 }
+.remote-footer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.transfer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.transfer-list {
+  overflow: auto;
+}
+.transfer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.transfer-label {
+  flex: 0 1 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-bar {
+  flex: 1;
+  min-width: 80px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  position: relative;
+}
+.transfer-bar > div {
+  height: 100%;
+  background: var(--accent);
+}
+.transfer-bar.indeterminate > div {
+  position: absolute;
+  width: 30% !important;
+  animation: transfer-slide 1.2s linear infinite;
+}
+@keyframes transfer-slide {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+.transfer-stat {
+  flex: none;
+  white-space: nowrap;
+}
+.transfer-status {
+  flex: 0 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-row.failed .transfer-status {
+  color: var(--danger);
+}
 .file-list {
   flex: 1;
   min-width: 0;
