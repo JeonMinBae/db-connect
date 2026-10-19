@@ -5,3 +5,19 @@ services:
     command: test:test:::upload
     ports:
       - "2222:22"
+  # 명시적 TLS 는 자체서명 인증서(TLS_CN)로 제공. 평문도 허용(--tls=1)
+  ftp:
+    image: stilliard/pure-ftpd
+    ports:
+      - "21:21"
+      - "30000-30009:30000-30009"
+    environment:
+      PUBLICHOST: localhost
+      FTP_USER_NAME: test
+      FTP_USER_PASS: test
+      FTP_USER_HOME: /home/test
+      FTP_PASSIVE_PORTS: "30000:30009"
+      ADDED_FLAGS: "--tls=1"
+      TLS_CN: localhost
+      TLS_ORG: test
+      TLS_C: KR

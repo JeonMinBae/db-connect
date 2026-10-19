@@ -58,6 +58,7 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
   const isMongo = d === "mongodb";
   const remote = isRemote(d);
   const isSftp = d === "sftp";
+  const isFtp = d === "ftp";
   const keyMode = isSftp && cfg.ssh_key_path !== null;
   const isLocal = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(cfg.host.trim().toLowerCase());
   // 인증서를 검증하지 않는 모드로 원격 서버에 접속하면 경고한다
@@ -65,6 +66,15 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
 
   // 편집 시 비밀번호 칸이 비어 있으면 null(유지), "삭제" 체크 시 "" 전달
   const pwArg = (): string | null => (clearPassword ? "" : password ? password : props.isNew ? "" : null);
+
+  // 암시적 TLS 는 기본 포트가 990 이라, 기본값(21/990)일 때만 함께 바꾼다
+  const changeFtpTls = (t: ConnectionConfig["ftp_tls"]) =>
+    setCfg((c) => ({
+      ...c,
+      ftp_tls: t,
+      port: t === "implicit" && c.port === 21 ? 990 : c.ftp_tls === "implicit" && t !== "implicit" && c.port === 990 ? 21 : c.port,
+      tls_insecure: t === "none" ? false : c.tls_insecure,
+    }));
 
   const changeDriver = (nd: ConnDriver) => {
     setTestResult(null);
@@ -269,6 +279,40 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
               </>
             )}
             {passwordRow}
+            {isFtp && (
+              <>
+                <label>암호화</label>
+                <select value={cfg.ftp_tls} onChange={(e) => changeFtpTls(e.target.value as ConnectionConfig["ftp_tls"])}>
+                  <option value="none">없음</option>
+                  <option value="explicit">명시적 TLS</option>
+                  <option value="implicit">암시적 TLS</option>
+                </select>
+                {cfg.ftp_tls === "none" && !isLocal && (
+                  <div className="full hint" style={{ color: "var(--danger)" }}>
+                    암호화하지 않으면 비밀번호와 파일이 평문으로 전송됩니다.
+                  </div>
+                )}
+                {cfg.ftp_tls !== "none" && (
+                  <>
+                    <label>인증서</label>
+                    <label className="row">
+                      <input type="checkbox" checked={cfg.tls_insecure} onChange={(e) => set("tls_insecure", e.target.checked)} />
+                      <span className="hint">자체서명 인증서 허용</span>
+                    </label>
+                    {cfg.tls_insecure && (
+                      <div className="full hint" style={{ color: "var(--danger)" }}>
+                        인증서를 검증하지 않으면 중간자가 통신을 가로챌 수 있습니다.
+                      </div>
+                    )}
+                  </>
+                )}
+                <label>파일명 인코딩</label>
+                <select value={cfg.fs_encoding} onChange={(e) => set("fs_encoding", e.target.value as ConnectionConfig["fs_encoding"])}>
+                  <option value="utf8">UTF-8</option>
+                  <option value="euc-kr">EUC-KR</option>
+                </select>
+              </>
+            )}
           </>
         )}
 
