@@ -42,7 +42,10 @@ export interface BlobReq {
 /** 대화상자를 취소하면 null */
 /** 로컬 경로 토큰: 전체 경로는 백엔드에만 있고 웹뷰는 id 와 이름만 안다 */
 export type Pick = { pick_id: string; names: string[] };
-export type TransferJob = { kind: "upload"; pick_id: string; dest_dir: string } | { kind: "download"; paths: string[]; pick_id: string };
+export type TransferJob =
+  | { kind: "upload"; pick_id: string; dest_dir: string }
+  | { kind: "download"; paths: string[]; pick_id: string }
+  | { kind: "copy"; paths: string[]; dest_dir: string };
 export type TransferAnswer = { choice: "overwrite" | "skip" | "rename"; all: boolean };
 export type TransferProgress = { job_id: string; file: string; done_bytes: number; total_bytes: number; done_files: number; total_files: number };
 export type TransferConflict = { job_id: string; ask_id: string; path: string; dir: boolean };
@@ -75,6 +78,8 @@ export const api = {
   remoteMkdir: (connId: string, path: string) => invoke<void>("remote_mkdir", { connId, path }),
   remoteRename: (connId: string, from: string, to: string) => invoke<void>("remote_rename", { connId, from, to }),
   remoteDelete: (connId: string, paths: string[]) => invoke<number>("remote_delete", { connId, paths }),
+  remoteChmod: (connId: string, paths: string[], mode: number) => invoke<void>("remote_chmod", { connId, paths, mode }),
+  remoteMove: (connId: string, paths: string[], destDir: string) => invoke<number>("remote_move", { connId, paths, destDir }),
   remotePresign: (connId: string, path: string, expiresSecs: number) => invoke<string>("remote_presign", { connId, path, expiresSecs }),
   remoteOpenText: (connId: string, path: string) => invoke<OpenText>("remote_open_text", { connId, path }),
   remoteSaveText: (connId: string, path: string, meta: TextMeta, text: string, expect: RemoteStamp, force: boolean) =>

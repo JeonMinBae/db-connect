@@ -21,6 +21,12 @@ pub fn parent(p: &str) -> String {
     normalize(&format!("{}/..", normalize(p)))
 }
 
+/// dest 가 src 자신이거나 그 하위인지 (폴더를 자기 안으로 옮기지 못하게)
+pub fn is_inside(dest: &str, src: &str) -> bool {
+    let (dest, src) = (normalize(dest), normalize(src));
+    src == "/" || dest == src || dest.starts_with(&format!("{src}/"))
+}
+
 pub fn name(p: &str) -> &str {
     p.rsplit('/').next().unwrap_or("")
 }
@@ -38,5 +44,9 @@ mod tests {
         assert_eq!(parent("/a/b"), "/a");
         assert_eq!(parent("/"), "/");
         assert_eq!(name("/a/b.txt"), "b.txt");
+        assert!(is_inside("/a/b", "/a"));
+        assert!(is_inside("/a", "/a/"));
+        assert!(!is_inside("/ab", "/a"));
+        assert!(!is_inside("/a", "/a/b"));
     }
 }

@@ -239,6 +239,20 @@ impl S3Session {
         Ok(())
     }
 
+    pub async fn chmod(&mut self, _p: &str, _mode: u32) -> AppResult<()> {
+        Err(AppError::user("S3 는 권한 변경을 지원하지 않습니다"))
+    }
+
+    /// 같은 버킷 안의 객체 하나를 서버에서 복사한다 (폴더는 호출자가 객체 단위로 푼다)
+    pub async fn server_copy(&mut self, from: &str, to: &str) -> AppResult<()> {
+        let (bucket, src) = self.target(from)?;
+        let (dst_bucket, dst) = self.target(to)?;
+        if bucket.name() != dst_bucket.name() {
+            return Err(AppError::user("버킷 사이에서는 복사할 수 없습니다"));
+        }
+        Self::copy(&bucket, &src, &dst).await
+    }
+
     pub async fn rename(&mut self, from: &str, to: &str) -> AppResult<()> {
         let (bucket, src) = self.target(from)?;
         let (dst_bucket, dst) = self.target(to)?;

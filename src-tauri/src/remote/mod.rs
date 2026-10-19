@@ -101,6 +101,22 @@ impl Session {
         }
     }
 
+    pub async fn chmod(&mut self, path: &str, mode: u32) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.chmod(path, mode).await,
+            Self::Ftp(s) => s.chmod(path, mode).await,
+            Self::S3(s) => s.chmod(path, mode).await,
+        }
+    }
+
+    /// S3 전용 서버 복사. FTP/SFTP 는 transfer 의 stream_copy 를 쓴다.
+    pub async fn server_copy(&mut self, from: &str, to: &str) -> AppResult<()> {
+        match self {
+            Self::S3(s) => s.server_copy(from, to).await,
+            _ => Err(AppError::user("서버 복사는 S3 접속에서만 사용할 수 있습니다")),
+        }
+    }
+
     pub async fn remove_file(&mut self, path: &str) -> AppResult<()> {
         match self {
             Self::Sftp(s) => s.remove_file(path).await,

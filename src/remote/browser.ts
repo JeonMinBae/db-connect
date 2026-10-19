@@ -74,3 +74,12 @@ export function permText(perm: number | null): string {
   if (perm === null) return "";
   return "rwxrwxrwx".replace(/./g, (c, i) => (perm & (1 << (8 - i)) ? c : "-"));
 }
+
+/** "755", "0644" → 숫자. 8진수 3~4자리가 아니면 null */
+export const parseMode = (s: string): number | null => (/^[0-7]{3,4}$/.test(s.trim()) ? parseInt(s.trim(), 8) : null);
+
+/** dest 가 src 자신이거나 그 하위인지 (폴더를 자기 안으로 옮기지 못하게) */
+export const isInside = (dest: string, src: string) => dest === src || dest.startsWith(src.endsWith("/") ? src : src + "/");
+
+/** 탭 안에서만 쓰는 잘라내기/복사 보관함. 접속이 다르면 붙여넣을 수 없다 */
+export type Clip = { mode: "cut" | "copy"; connId: string; paths: string[] };

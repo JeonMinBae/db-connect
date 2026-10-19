@@ -206,6 +206,16 @@ impl FtpSession {
         self.ftp.rename(path::normalize(from), path::normalize(to)).await.map_err(ftp_err)
     }
 
+    pub async fn chmod(&mut self, p: &str, mode: u32) -> AppResult<()> {
+        let p = path::normalize(p);
+        // 제어 채널 한 줄이므로 줄바꿈이 섞인 경로로 명령이 끼어들지 못하게 거부한다
+        if p.contains(['\r', '\n']) {
+            return Err(AppError::user("경로에 줄바꿈을 쓸 수 없습니다"));
+        }
+        self.ftp.site(format!("CHMOD {:o} {p}", mode & 0o7777)).await.map_err(ftp_err)?;
+        Ok(())
+    }
+
     pub async fn remove_file(&mut self, p: &str) -> AppResult<()> {
         self.ftp.rm(path::normalize(p)).await.map_err(ftp_err)
     }

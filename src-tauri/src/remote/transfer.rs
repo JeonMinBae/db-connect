@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 
 use super::{ops, path, Session};
 use crate::error::{AppError, AppResult};
@@ -17,12 +18,15 @@ pub enum Job {
     Upload { pick_id: String, dest_dir: String },
     /// pick 은 단일 파일 1개를 받을 때는 저장할 파일 경로, 그 외에는 대상 폴더
     Download { paths: Vec<String>, pick_id: String },
+    /// 같은 접속 안에서의 복사. 로컬 pick 이 없다.
+    Copy { paths: Vec<String>, dest_dir: String },
 }
 
 impl Job {
-    pub fn pick_id(&self) -> &str {
+    pub fn pick_id(&self) -> Option<&str> {
         match self {
-            Job::Upload { pick_id, .. } | Job::Download { pick_id, .. } => pick_id,
+            Job::Upload { pick_id, .. } | Job::Download { pick_id, .. } => Some(pick_id),
+            Job::Copy { .. } => None,
         }
     }
 }
@@ -62,8 +66,8 @@ pub struct TransferDone {
 pub struct Env {
     pub job_id: String,
     pub emit: Arc<dyn Fn(Progress) + Send + Sync>,
-    /// 충돌 질문. 인자는 대상 경로. 중지되면 Err.
-    pub ask: Arc<dyn Fn(String) -> BoxFuture<'static, AppResult<Answer>> + Send + Sync>,
+    /// 충돌 질문. 인자는 (대상 경로, 폴더 여부). 중지되면 Err.
+    pub ask: Arc<dyn Fn(String, bool) -> BoxFuture<'static, AppResult<Answer>> + Send + Sync>,
 }
 
 const TICK: Duration = Duration::from_millis(200);
@@ -132,8 +136,8 @@ impl Ctx {
         self.prog.counter.clone()
     }
 
-    async fn ask(&self, target: &str) -> AppResult<Answer> {
-        (self.env.ask)(target.to_string()).await
+    async fn ask(&self, target: &str, dir: bool) -> AppResult<Answer> {
+        (self.env.ask)(target.to_string(), dir).await
     }
 
     fn done(&self) -> TransferDone {
@@ -142,14 +146,14 @@ impl Ctx {
 }
 
 /// 대상이 이미 있을 때의 처리. None 이면 건너뛴다. 반환은 실제로 쓸 대상 이름.
-async fn resolve_conflict(ctx: &mut Ctx, dir_has: impl Fn(&str) -> bool, name: &str, target: &str) -> AppResult<Option<String>> {
+async fn resolve_conflict(ctx: &mut Ctx, dir_has: impl Fn(&str) -> bool, name: &str, target: &str, dir: bool) -> AppResult<Option<String>> {
     if !dir_has(name) {
         return Ok(Some(name.to_string()));
     }
     let answer = match ctx.policy {
         Some(a) => a,
         None => {
-            let a = ctx.ask(target).await?; // 이벤트 발행 후 oneshot 대기, sender drop = 중지
+            let a = ctx.ask(target, dir).await?; // 이벤트 발행 후 oneshot 대기, sender drop = 중지
             if a.all {
                 ctx.policy = Some(a);
             }
@@ -166,9 +170,13 @@ async fn resolve_conflict(ctx: &mut Ctx, dir_has: impl Fn(&str) -> bool, name: &
     })
 }
 
+/// Copy 에서 FTP/SFTP 가 쓸 두 번째 세션을 여는 함수 (필요할 때만 한 번 호출)
+pub type Opener = Box<dyn FnOnce() -> BoxFuture<'static, AppResult<Session>> + Send>;
+
 /// `local` 은 job 의 pick_id 를 풀어 낸 로컬 경로들
-pub async fn run(mut s: Session, job: Job, local: Vec<PathBuf>, env: Env) -> AppResult<TransferDone> {
+pub async fn run(mut s: Session, job: Job, local: Vec<PathBuf>, env: Env, open_second: Option<Opener>) -> AppResult<TransferDone> {
     match job {
+        Job::Copy { paths, dest_dir } => copy(&mut s, &paths, &path::normalize(&dest_dir), env, open_second).await,
         Job::Upload { dest_dir, .. } => upload(&mut s, &path::normalize(&dest_dir), &local, env).await,
         Job::Download { paths, .. } => {
             let target = local.into_iter().next().ok_or_else(|| AppError::user("저장 위치가 없습니다."))?;
@@ -248,7 +256,7 @@ async fn upload(s: &mut Session, dest: &str, local: &[PathBuf], env: Env) -> App
         }
         let chosen = {
             let names = dir_names(&mut cache, s, &remote_parent).await?;
-            resolve_conflict(&mut ctx, |n| names.contains(n), name, &target).await?
+            resolve_conflict(&mut ctx, |n| names.contains(n), name, &target, false).await?
         };
         let Some(chosen) = chosen else { continue };
         let target = path::join(&remote_parent, &chosen);
@@ -352,11 +360,122 @@ async fn download(s: &mut Session, paths: &[String], target: &Path, env: Env) ->
             continue;
         }
         let shown = local_parent.join(name);
-        let chosen = resolve_conflict(&mut ctx, |n| local_parent.join(n).exists(), name, &shown.to_string_lossy()).await?;
+        let chosen = resolve_conflict(&mut ctx, |n| local_parent.join(n).exists(), name, &shown.to_string_lossy(), false).await?;
         let Some(chosen) = chosen else { continue };
         ctx.begin(&item.rel);
         download_one(s, &item.remote, &local_parent.join(chosen), ctx.counter()).await?;
         ctx.file_done();
+    }
+    Ok(ctx.done())
+}
+
+/// FTP/SFTP 는 서버 복사 명령이 없어 세션 두 개로 내려받는 즉시 올린다 (임시 파일 없음)
+async fn stream_copy(src: &mut Session, dst: &mut Session, from: &str, to: &str, len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+    let (mut w, r) = tokio::io::duplex(256 * 1024);
+    let down = async {
+        src.download(from, &mut w, Arc::new(AtomicU64::new(0))).await?;
+        w.shutdown().await.map_err(|e| AppError::Remote(e.to_string()))?; // EOF 를 알려야 업로드가 끝난다
+        AppResult::Ok(())
+    };
+    let up = dst.upload(to, r, len, counter);
+    tokio::try_join!(down, up)?;
+    Ok(())
+}
+
+struct Copier {
+    second: Option<Session>,
+    opener: Option<Opener>,
+}
+
+impl Copier {
+    async fn file(&mut self, ctx: &mut Ctx, s: &mut Session, from: &str, to: &str, size: u64, shown: &str) -> AppResult<()> {
+        // 자기 자신 위로 덮어쓰면 내용이 비워지므로 건너뛴다
+        if from == to {
+            ctx.skipped += 1;
+            return Ok(());
+        }
+        ctx.begin(shown);
+        if matches!(s, Session::S3(_)) {
+            s.server_copy(from, to).await?;
+            ctx.prog.counter.fetch_add(size, Ordering::Relaxed);
+        } else {
+            if self.second.is_none() {
+                let open = self.opener.take().ok_or_else(|| AppError::user("복사용 두 번째 접속을 열 수 없습니다."))?;
+                self.second = Some(open().await?);
+            }
+            stream_copy(s, self.second.as_mut().unwrap(), from, to, size, ctx.counter()).await?;
+        }
+        ctx.file_done();
+        Ok(())
+    }
+}
+
+/// 없으면 만들고, 같은 이름의 파일이 있으면 오류. 있는 폴더는 합친다.
+async fn ensure_dir(s: &mut Session, cache: &mut HashMap<String, HashSet<String>>, target: &str) -> AppResult<()> {
+    match s.stat(target).await? {
+        Some((e, _)) if !e.dir => Err(AppError::user(format!("같은 이름의 파일이 있어 폴더를 만들 수 없습니다: {target}"))),
+        Some(_) => Ok(()),
+        None => {
+            s.mkdir(target).await?;
+            cache.insert(target.to_string(), HashSet::new());
+            Ok(())
+        }
+    }
+}
+
+async fn copy(s: &mut Session, paths: &[String], dest: &str, env: Env, open_second: Option<Opener>) -> AppResult<TransferDone> {
+    let mut tops = Vec::new();
+    for p in paths {
+        let p = path::normalize(p);
+        if p == "/" {
+            return Err(AppError::user("루트는 복사할 수 없습니다"));
+        }
+        let (e, _) = s.stat(&p).await?.ok_or_else(|| AppError::user(format!("원격 경로가 없습니다: {p}")))?;
+        if e.dir && path::is_inside(dest, &p) {
+            return Err(AppError::user(format!("폴더를 자기 자신 안으로 복사할 수 없습니다: {p}")));
+        }
+        let kids = if e.dir { ops::walk(s, &p).await? } else { Vec::new() };
+        tops.push((p, e, kids));
+    }
+    let files = || tops.iter().flat_map(|(_, e, k)| std::iter::once(e).chain(k.iter().map(|(_, c)| c))).filter(|e| !e.dir);
+    let (total_files, total_bytes) = (files().count() as u64, files().map(|e| e.size).sum());
+    let mut ctx = Ctx::new(env, total_bytes, total_files);
+    let mut cache: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut copier = Copier { second: None, opener: open_second };
+
+    for (src, e, kids) in &tops {
+        let chosen = {
+            let names = dir_names(&mut cache, s, dest).await?;
+            resolve_conflict(&mut ctx, |n| names.contains(n), &e.name, &path::join(dest, &e.name), e.dir).await?
+        };
+        let Some(chosen) = chosen else { continue };
+        let top = path::join(dest, &chosen);
+        if let Some(c) = cache.get_mut(dest) {
+            c.insert(chosen.clone());
+        }
+        if !e.dir {
+            copier.file(&mut ctx, s, src, &top, e.size, &e.name).await?;
+            continue;
+        }
+        ensure_dir(s, &mut cache, &top).await?;
+        for (rel, c) in kids {
+            let target = path::join(&top, rel);
+            if c.dir {
+                ensure_dir(s, &mut cache, &target).await?;
+                continue;
+            }
+            let (parent_rel, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+            let tparent = path::join(&top, parent_rel);
+            let picked = {
+                let names = dir_names(&mut cache, s, &tparent).await?;
+                resolve_conflict(&mut ctx, |n| names.contains(n), name, &target, false).await?
+            };
+            let Some(picked) = picked else { continue };
+            copier.file(&mut ctx, s, &path::join(src, rel), &path::join(&tparent, &picked), c.size, &format!("{}/{rel}", e.name)).await?;
+            if let Some(set) = cache.get_mut(&tparent) {
+                set.insert(picked);
+            }
+        }
     }
     Ok(ctx.done())
 }

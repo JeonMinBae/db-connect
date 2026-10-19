@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
-import { mtimeText, permText, sizeText, sortEntries, visibleEntries, type SortKey } from "../../remote/browser";
+import { parseMode, type Clip, mtimeText, permText, sizeText, sortEntries, visibleEntries, type SortKey } from "../../remote/browser";
 import { insideElement, registerDropHandler } from "../../remote/drops";
 import { join, parent } from "../../remote/path";
 import { useTabs } from "../../store/tabs";
@@ -25,6 +25,12 @@ interface Props {
   onDropPick?: (pick: Pick) => void;
   /** 이 탭이 활성일 때만 드롭을 받는다 */
   active: boolean;
+  /** 탭 로컬 클립보드 (잘라내기·복사). 접속이 다르면 붙여넣기 비활성 */
+  clipboard: Clip | null;
+  onClip: (mode: "cut" | "copy", paths: string[]) => void;
+  onPaste: (destDir: string) => void;
+  /** 목록 안 드래그: 폴더 위에 놓으면 이동, copy 면 복사 */
+  onTransfer: (paths: string[], destDir: string, copy: boolean) => void;
 }
 
 const COLS: { key: SortKey; label: string }[] = [
@@ -138,6 +144,88 @@ export function FileList(props: Props) {
     props.onChanged([path, ...targets.filter((t) => t.dir).map((t) => join(path, t.name))]);
   };
 
+  const chmod = async (targets: RemoteEntry[]) => {
+    if (!targets.length) return;
+    const perm = targets[0].perm;
+    const v = await promptDialog({
+      title: "권한 변경",
+      fields: [{ label: "권한 (8진수)", value: perm === null ? "644" : (perm & 0o7777).toString(8).padStart(3, "0") }],
+      okLabel: "변경",
+      hint: "폴더도 그 폴더 자체만 바뀌고 안의 항목에는 적용되지 않습니다.",
+    });
+    if (!v) return;
+    const mode = parseMode(v[0]);
+    if (mode === null) return toast("8진수 3~4자리로 입력하세요 (예: 644, 0755)", "error");
+    try {
+      await api.remoteChmod(cfg.id, targets.map((t) => join(path, t.name)), mode);
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    }
+    props.onChanged([path]);
+  };
+
+  const clip = (mode: "cut" | "copy", targets: RemoteEntry[]) => {
+    if (!targets.length) return;
+    props.onClip(mode, targets.map((t) => join(path, t.name)));
+  };
+  const canPaste = !cfg.read_only && !!props.clipboard && props.clipboard.connId === cfg.id;
+
+  // 폴더 행으로 끌어다 놓기: HTML5 DnD 는 Tauri 의 파일 드롭이 가로채므로 포인터 이벤트로 직접 처리한다
+  const [drag, setDrag] = useState<{ x: number; y: number; label: string; target: string | null; copy: boolean } | null>(null);
+  const suppressClick = useRef(false);
+
+  const dropTargetAt = (x: number, y: number, srcPaths: string[]): string | null => {
+    const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop-dir]");
+    const t = el && host.current?.contains(el) ? (el.dataset.dropDir ?? null) : null;
+    return t !== null && !srcPaths.includes(t) ? t : null;
+  };
+
+  const startDrag = (e: React.PointerEvent, r: RemoteEntry) => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || cfg.read_only) return;
+    const names = sel.has(r.name) ? [...sel] : [r.name];
+    if (!sel.has(r.name)) {
+      setSel(new Set([r.name]));
+      anchor.current = r.name;
+    }
+    const srcPaths = names.map((n) => join(path, n));
+    const label = names.length === 1 ? names[0] : `${names.length}개 항목`;
+    const start = { x: e.clientX, y: e.clientY };
+    let active = false;
+    const stop = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("keydown", onKeyDown, true);
+      setDrag(null);
+    };
+    const onMove = (ev: PointerEvent) => {
+      if (!active && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 4) return;
+      active = true;
+      setDrag({ x: ev.clientX, y: ev.clientY, label, target: dropTargetAt(ev.clientX, ev.clientY, srcPaths), copy: ev.ctrlKey || ev.metaKey });
+    };
+    const onUp = (ev: PointerEvent) => {
+      const target = active ? dropTargetAt(ev.clientX, ev.clientY, srcPaths) : null;
+      stop();
+      if (!active) return;
+      suppressClick.current = true; // 놓은 뒤 따라오는 click 이 선택을 바꾸지 않게
+      setTimeout(() => (suppressClick.current = false), 0);
+      if (target !== null) props.onTransfer(srcPaths, target, ev.ctrlKey || ev.metaKey);
+    };
+    const onCancel = () => stop();
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.stopPropagation();
+      active = false;
+      stop();
+      suppressClick.current = true;
+      setTimeout(() => (suppressClick.current = false), 0);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("keydown", onKeyDown, true);
+  };
+
   const presign = async (r: RemoteEntry) => {
     const v = await promptDialog({
       title: "사전서명 URL 복사",
@@ -182,8 +270,11 @@ export function FileList(props: Props) {
       items.push({ label: "다운로드…", onClick: () => props.onDownload(targets), disabled: !targets.length });
       items.push({ label: "이름 변경…", onClick: () => void rename(r), disabled: ro || targets.length !== 1 });
       items.push({ label: "삭제…", onClick: () => void remove(targets), disabled: ro });
+      if (cfg.driver !== "s3") items.push({ label: "권한 변경…", onClick: () => void chmod(targets), disabled: ro });
+      items.push("sep", { label: "잘라내기", onClick: () => clip("cut", targets), disabled: ro }, { label: "복사", onClick: () => clip("copy", targets) });
       if (cfg.driver === "s3" && !r.dir) items.push("sep", { label: "사전서명 URL 복사…", onClick: () => void presign(r), disabled: targets.length !== 1 });
     }
+    items.push({ label: "붙여넣기", onClick: () => props.onPaste(path), disabled: !canPaste });
     items.push("sep", { label: "새로고침", onClick: props.onRefresh });
     showContextMenu(e, items);
   };
@@ -193,7 +284,11 @@ export function FileList(props: Props) {
     if (e.key === "Delete" && !cfg.read_only) void remove(selected);
     else if (e.key === "F2" && !cfg.read_only && selected.length === 1) void rename(selected[0]);
     else if (e.key === "Enter" && selected.length === 1) open(selected[0]);
-    else if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
+    else if ((e.ctrlKey || e.metaKey) && e.key === "x" && !cfg.read_only) clip("cut", selected);
+    else if ((e.ctrlKey || e.metaKey) && e.key === "c") clip("copy", selected);
+    else if ((e.ctrlKey || e.metaKey) && e.key === "v") {
+      if (canPaste) props.onPaste(path);
+    } else if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       setSel(new Set(rows.map((r) => r.name)));
     } else return;
@@ -223,15 +318,19 @@ export function FileList(props: Props) {
           </thead>
           <tbody>
             {path !== "/" && (
-              <tr onDoubleClick={() => props.onOpenDir(parent(path))}>
+              <tr data-drop-dir={parent(path)} className={drag?.target === parent(path) ? "drop-target" : ""} onDoubleClick={() => props.onOpenDir(parent(path))}>
                 <td colSpan={showPerm ? 4 : 3}>📁 ..</td>
               </tr>
             )}
             {rows.map((r) => (
               <tr
                 key={r.name}
-                className={sel.has(r.name) ? "selected" : ""}
-                onClick={(e) => click(e, r)}
+                data-drop-dir={r.dir ? join(path, r.name) : undefined}
+                className={(sel.has(r.name) ? "selected" : "") + (r.dir && drag?.target === join(path, r.name) ? " drop-target" : "")}
+                onPointerDown={(e) => startDrag(e, r)}
+                onClick={(e) => {
+                  if (!suppressClick.current) click(e, r);
+                }}
                 onDoubleClick={() => open(r)}
                 onContextMenu={(e) => {
                   e.stopPropagation();
@@ -250,6 +349,13 @@ export function FileList(props: Props) {
         </table>
       )}
       {loading && entries !== null && <div className="file-list-loading">불러오는 중…</div>}
+      {drag && (
+        <div className="drag-label" style={{ left: drag.x + 12, top: drag.y + 12 }}>
+          {drag.copy ? "⧉ 복사 " : "→ 이동 "}
+          {drag.label}
+          {drag.target !== null ? ` → ${drag.target}` : ""}
+        </div>
+      )}
     </div>
   );
 }

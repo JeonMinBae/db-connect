@@ -159,6 +159,12 @@ impl SftpSession {
         self.sftp.rename(path::normalize(from), path::normalize(to)).await.map_err(sftp_err)
     }
 
+    /// 권한 속성만 보낸다 (파일 종류 비트는 건드리지 않음)
+    pub async fn chmod(&mut self, p: &str, mode: u32) -> AppResult<()> {
+        let attrs = russh_sftp::protocol::FileAttributes { permissions: Some(mode & 0o7777), ..Default::default() };
+        self.sftp.set_metadata(path::normalize(p), attrs).await.map_err(sftp_err)
+    }
+
     pub async fn remove_file(&mut self, p: &str) -> AppResult<()> {
         self.sftp.remove_file(path::normalize(p)).await.map_err(sftp_err)
     }

@@ -8,6 +8,8 @@ services:
   # 명시적 TLS 는 자체서명 인증서(TLS_CN)로 제공. 평문도 허용(--tls=1)
   ftp:
     image: stilliard/pure-ftpd
+    # 이미지 기본 명령의 -R(chmod 금지)을 빼고 동시 접속 한도(-c/-C)를 늘린다
+    command: /bin/sh -c '/run.sh -l puredb:/etc/pure-ftpd/pureftpd.pdb -E -j -c 50 -C 20 -P $$PUBLICHOST'
     ports:
       - "21:21"
       - "30000-30009:30000-30009"

@@ -69,7 +69,7 @@ fn test_env(answer: Option<crate::remote::transfer::Answer>) -> crate::remote::t
     Env {
         job_id: "it".into(),
         emit: std::sync::Arc::new(|_| {}),
-        ask: std::sync::Arc::new(move |_| {
+        ask: std::sync::Arc::new(move |_, _| {
             Box::pin(async move { answer.ok_or_else(|| AppError::user("질문이 오면 안 된다")) })
         }),
     }
@@ -91,13 +91,13 @@ async fn transfer_scenario(cfg: &ConnectionConfig, data_dir: &std::path::Path, s
     s.mkdir(&base).await.unwrap();
 
     let up = Job::Upload { pick_id: String::new(), dest_dir: base.clone() };
-    let done = transfer::run(open().await, up, vec![root.clone()], test_env(None)).await.unwrap();
+    let done = transfer::run(open().await, up, vec![root.clone()], test_env(None), None).await.unwrap();
     assert_eq!(done, TransferDone { files: 3, bytes: 5 + 100_000 + "한글 content".len() as u64, skipped: 0 });
 
     // 다운로드: 폴더 대상
     let dst = tempfile::tempdir().unwrap();
     let down = Job::Download { paths: vec![format!("{base}/dir")], pick_id: String::new() };
-    let done = transfer::run(open().await, down, vec![dst.path().to_path_buf()], test_env(None)).await.unwrap();
+    let done = transfer::run(open().await, down, vec![dst.path().to_path_buf()], test_env(None), None).await.unwrap();
     assert_eq!(done.files, 3);
     for rel in ["a.txt", "sub/b.bin", "sub/deep/c.txt"] {
         assert_eq!(std::fs::read(root.join(rel)).unwrap(), std::fs::read(dst.path().join("dir").join(rel)).unwrap(), "{rel}");
@@ -107,18 +107,18 @@ async fn transfer_scenario(cfg: &ConnectionConfig, data_dir: &std::path::Path, s
     // 단일 파일 다운로드는 pick 경로가 곧 대상 파일
     let one = dst.path().join("renamed.txt");
     let down = Job::Download { paths: vec![format!("{base}/dir/a.txt")], pick_id: String::new() };
-    transfer::run(open().await, down, vec![one.clone()], test_env(None)).await.unwrap();
+    transfer::run(open().await, down, vec![one.clone()], test_env(None), None).await.unwrap();
     assert_eq!(std::fs::read(&one).unwrap(), b"alpha");
 
     // 같은 이름 업로드: Rename 응답 → "a (1).txt", Skip 은 skipped 로 집계
     let up = Job::Upload { pick_id: String::new(), dest_dir: format!("{base}/dir") };
     let rename = Answer { choice: Choice::Rename, all: false };
-    let done = transfer::run(open().await, up.clone(), vec![root.join("a.txt")], test_env(Some(rename))).await.unwrap();
+    let done = transfer::run(open().await, up.clone(), vec![root.join("a.txt")], test_env(Some(rename)), None).await.unwrap();
     assert_eq!(done.files, 1);
     let names: Vec<_> = s.list(&format!("{base}/dir")).await.unwrap().into_iter().map(|e| e.name).collect();
     assert!(names.contains(&"a (1).txt".to_string()), "{names:?}");
     let skip = Answer { choice: Choice::Skip, all: true };
-    let done = transfer::run(open().await, up, vec![root.join("a.txt")], test_env(Some(skip))).await.unwrap();
+    let done = transfer::run(open().await, up, vec![root.join("a.txt")], test_env(Some(skip)), None).await.unwrap();
     assert_eq!((done.files, done.skipped), (0, 1));
 
     // 4개: a.txt, a (1).txt, b.bin, c.txt
@@ -154,6 +154,60 @@ async fn text_scenario(s: &mut Session, p: String) {
     assert_eq!(text::save_text(s, p, meta, "x", &saved, false).await.unwrap(), SaveText::Conflict);
 }
 
+/// 프로토콜 공통: 같은 접속 안 복사(같은 폴더 → Rename, 다른 폴더, 자기 하위 거부)와 폴더 이동
+async fn copy_scenario(cfg: &ConnectionConfig, data_dir: &std::path::Path, secret: &str, base: String) {
+    let open = || async { Session::open(cfg, Some(secret), data_dir).await.unwrap() };
+    let opener = || -> Option<transfer::Opener> {
+        let (cfg, secret, dd) = (cfg.clone(), secret.to_string(), data_dir.to_path_buf());
+        Some(Box::new(move || Box::pin(async move { Session::open(&cfg, Some(&secret), &dd).await })))
+    };
+    let mut s = open().await;
+    let big: Vec<u8> = (0..=255u8).cycle().take(300_000).collect();
+    s.mkdir(&base).await.unwrap();
+    s.mkdir(&format!("{base}/dir")).await.unwrap();
+    s.mkdir(&format!("{base}/dir/sub")).await.unwrap();
+    s.mkdir(&format!("{base}/dst")).await.unwrap();
+    s.write_all(&format!("{base}/x.txt"), &big).await.unwrap();
+    s.write_all(&format!("{base}/dir/sub/y.txt"), "한글".as_bytes()).await.unwrap();
+
+    // 같은 폴더로 복사하면 항상 충돌 → Rename
+    let rename = Answer { choice: Choice::Rename, all: false };
+    let job = Job::Copy { paths: vec![format!("{base}/x.txt")], dest_dir: base.clone() };
+    let done = transfer::run(open().await, job, vec![], test_env(Some(rename)), opener()).await.unwrap();
+    assert_eq!((done.files, done.bytes), (1, big.len() as u64));
+    assert_eq!(s.read_all(&format!("{base}/x (1).txt"), 1 << 20).await.unwrap(), big);
+    assert_eq!(s.read_all(&format!("{base}/x.txt"), 1 << 20).await.unwrap(), big);
+
+    // 폴더를 다른 폴더로 복사 (질문 없음)
+    let job = Job::Copy { paths: vec![format!("{base}/dir")], dest_dir: format!("{base}/dst") };
+    let done = transfer::run(open().await, job, vec![], test_env(None), opener()).await.unwrap();
+    assert_eq!(done.files, 1);
+    assert_eq!(s.read_all(&format!("{base}/dst/dir/sub/y.txt"), 100).await.unwrap(), "한글".as_bytes());
+    assert!(s.stat(&format!("{base}/dir/sub/y.txt")).await.unwrap().is_some());
+
+    // 자기 하위로 복사는 거부
+    let job = Job::Copy { paths: vec![format!("{base}/dir")], dest_dir: format!("{base}/dir/sub") };
+    assert!(matches!(transfer::run(open().await, job, vec![], test_env(None), opener()).await, Err(AppError::User(_))));
+
+    // 폴더 이동 (rename)
+    s.rename(&format!("{base}/dst/dir"), &format!("{base}/moved")).await.unwrap();
+    assert!(s.stat(&format!("{base}/dst/dir")).await.unwrap().is_none());
+    assert_eq!(s.read_all(&format!("{base}/moved/sub/y.txt"), 100).await.unwrap(), "한글".as_bytes());
+
+    ops::delete_tree(&mut s, &base).await.unwrap();
+    assert!(s.stat(&base).await.unwrap().is_none());
+}
+
+/// chmod 후 perm 확인 (FTP 픽스처는 -R 없이 띄워 SITE CHMOD 를 허용한다)
+async fn chmod_scenario(s: &mut Session, p: String) {
+    s.write_all(&p, b"x").await.unwrap();
+    s.chmod(&p, 0o600).await.unwrap();
+    assert_eq!(s.stat(&p).await.unwrap().unwrap().0.perm, Some(0o600));
+    s.chmod(&p, 0o644).await.unwrap();
+    assert_eq!(s.stat(&p).await.unwrap().unwrap().0.perm, Some(0o644));
+    s.remove_file(&p).await.unwrap();
+}
+
 /// 프로토콜 공통 시나리오: mkdir → 업로드 → 목록 → 텍스트 왕복 → rename → 재귀 삭제
 pub async fn scenario(s: &mut Session, base: &str) {
     s.mkdir(base).await.unwrap();
@@ -176,6 +230,8 @@ async fn sftp_scenario() {
     scenario(&mut s, &format!("/upload/it-{}", uuid::Uuid::new_v4())).await;
     text_scenario(&mut s, format!("/upload/it-{}.txt", uuid::Uuid::new_v4())).await;
     transfer_scenario(&sftp_cfg(), d.path(), "test", format!("/upload/it-{}", uuid::Uuid::new_v4())).await;
+    copy_scenario(&sftp_cfg(), d.path(), "test", format!("/upload/it-{}", uuid::Uuid::new_v4())).await;
+    chmod_scenario(&mut s, format!("/upload/it-{}.txt", uuid::Uuid::new_v4())).await;
 }
 
 fn ftp_cfg() -> ConnectionConfig {
@@ -195,6 +251,8 @@ async fn ftp_all(cfg: &ConnectionConfig) {
     scenario(&mut s, &format!("/it-{}", uuid::Uuid::new_v4())).await;
     text_scenario(&mut s, format!("/it-{}.txt", uuid::Uuid::new_v4())).await;
     transfer_scenario(cfg, &tmp(), "test", format!("/it-{}", uuid::Uuid::new_v4())).await;
+    copy_scenario(cfg, &tmp(), "test", format!("/it-{}", uuid::Uuid::new_v4())).await;
+    chmod_scenario(&mut s, format!("/it-{}.txt", uuid::Uuid::new_v4())).await;
 }
 
 #[tokio::test]
@@ -263,6 +321,11 @@ async fn s3_scenarios() {
     scenario(&mut s, &format!("/it-{}", uuid::Uuid::new_v4())).await;
     text_scenario(&mut s, format!("/it-{}.txt", uuid::Uuid::new_v4())).await;
     transfer_scenario(&cfg, &tmp(), "minioadmin", format!("/it-{}", uuid::Uuid::new_v4())).await;
+    copy_scenario(&cfg, &tmp(), "minioadmin", format!("/it-{}", uuid::Uuid::new_v4())).await;
+    let p = format!("/it-{}.txt", uuid::Uuid::new_v4());
+    s.write_all(&p, b"x").await.unwrap();
+    assert!(matches!(s.chmod(&p, 0o600).await, Err(AppError::User(_))));
+    s.remove_file(&p).await.unwrap();
 }
 
 #[tokio::test]

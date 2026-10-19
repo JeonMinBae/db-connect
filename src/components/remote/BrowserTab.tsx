@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
-import { History } from "../../remote/browser";
-import { join, normalize } from "../../remote/path";
+import { History, type Clip } from "../../remote/browser";
+import { join, normalize, parent } from "../../remote/path";
 import { subscribeDone, useTransfers } from "../../remote/transfers";
 import { toast } from "../../store/ui";
 import { Splitter, showContextMenu } from "../ui";
@@ -78,6 +78,40 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
     refresh();
   };
 
+  const [clip, setClip] = useState<Clip | null>(null);
+
+  const copyTo = (paths: string[], dest: string) => {
+    const what = paths.length === 1 ? paths[0].split("/").pop() : `${paths.length}개 항목`;
+    useTransfers.getState().enqueue(props.tabId, cfg.id, `⧉ ${what} → ${dest}`, { kind: "copy", paths, dest_dir: dest });
+  };
+
+  const moveTo = async (paths: string[], dest: string): Promise<boolean> => {
+    try {
+      const n = await api.remoteMove(cfg.id, paths, dest);
+      if (n) toast(`${n}개 항목을 옮겼습니다`);
+      return true;
+    } catch (e) {
+      toast(errorMessage(e), "error");
+      return false;
+    } finally {
+      // 일부만 옮겨졌을 수도 있으니 실패해도 갱신한다
+      changed([...new Set([dest, ...paths.map(parent), ...paths])]);
+    }
+  };
+
+  const paste = async (dest: string) => {
+    if (cfg.read_only) return toast("읽기 전용 접속입니다", "error");
+    if (!clip || clip.connId !== cfg.id) return;
+    if (clip.mode === "copy") copyTo(clip.paths, dest);
+    else if (await moveTo(clip.paths, dest)) setClip(null);
+  };
+
+  const transfer = (paths: string[], dest: string, copy: boolean) => {
+    if (cfg.read_only) return toast("읽기 전용 접속입니다", "error");
+    if (copy) copyTo(paths, dest);
+    else void moveTo(paths, dest);
+  };
+
   const enqueueUpload = (pick: Pick) => {
     const dest = pathRef.current;
     const what = pick.names.length === 1 ? pick.names[0] : `${pick.names.length}개 항목`;
@@ -124,7 +158,7 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
   useEffect(
     () =>
       subscribeDone(props.tabId, (it) => {
-        if (it.job.kind === "upload") onUploaded.current(it.job.dest_dir);
+        if (it.job.kind === "upload" || it.job.kind === "copy") onUploaded.current(it.job.dest_dir);
       }),
     [props.tabId],
   );
@@ -164,7 +198,7 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
           <FolderTree ref={tree} connId={cfg.id} current={path} showHidden={showHidden} onOpen={(p) => void go(p)} />
         </div>
         <Splitter dir="v" size={treeWidth} onResize={setTreeWidth} min={120} max={600} />
-        <FileList cfg={cfg} active={props.active} onDropPick={enqueueUpload} onDownload={(t) => void download(t)} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
+        <FileList cfg={cfg} active={props.active} clipboard={clip} onClip={(mode, paths) => setClip({ mode, connId: cfg.id, paths })} onPaste={(d) => void paste(d)} onTransfer={transfer} onDropPick={enqueueUpload} onDownload={(t) => void download(t)} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
       </div>
       <div className="remote-footer">
         <TransferPanel tabId={props.tabId} />

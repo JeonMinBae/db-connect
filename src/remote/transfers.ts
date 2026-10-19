@@ -122,7 +122,7 @@ export const useTransfers = create<TransfersState>((set, get) => {
           void api.cancelQuery(it.id).catch(() => {});
         }
         // 끝난 항목은 retry 에 pick 이 필요하므로 지울 때만 해제한다
-        void api.pickRelease(it.job.pick_id).catch(() => {});
+        if ("pick_id" in it.job) void api.pickRelease(it.job.pick_id).catch(() => {});
       }
       set((s) => ({ items: s.items.filter((i) => !ids.includes(i.id)), asks: s.asks.filter((a) => !ids.includes(a.job_id)) }));
     },
