@@ -59,7 +59,6 @@ async fn sftp_mkdir_rename_delete() {
     let renamed = format!("{base}-r");
     s.rename(&base, &renamed).await.unwrap();
     assert!(s.stat(&base).await.unwrap().is_none());
-    // 파일 쓰기 API 는 아직 없어 빈 하위 폴더만 검증한다 (파일 포함 삭제는 업로드 단위에서)
     assert_eq!(ops::delete_tree(&mut s, &renamed).await.unwrap(), 0);
     assert!(s.stat(&renamed).await.unwrap().is_none());
 }

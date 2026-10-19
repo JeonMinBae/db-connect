@@ -318,7 +318,7 @@ impl S3Session {
         Ok(false)
     }
 
-    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, _len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
         let (bucket, key) = self.target(p)?;
         let mut r = Counting::new(reader, counter);
         bucket.put_object_stream(&mut r, rp(&key)).await.map_err(s3_err)?;

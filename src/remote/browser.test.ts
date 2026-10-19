@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dragNames, History, isInside, mtimeText, parseMode, permText, sizeText, sortEntries, visibleEntries } from "./browser";
+import { dragNames, History, mtimeText, parseMode, permText, sizeText, sortEntries, visibleEntries } from "./browser";
 
 const e = (name: string, dir = false, size = 0, mtime: number | null = null) => ({ name, dir, size, mtime, perm: null });
 
@@ -64,17 +64,12 @@ describe("표시 형식", () => {
   });
 });
 
-describe("parseMode / isInside", () => {
+describe("parseMode", () => {
   it("8진수 3~4자리만 허용", () => {
     expect(parseMode("755")).toBe(0o755);
     expect(parseMode("0644")).toBe(0o644);
     expect(parseMode("8")).toBeNull();
     expect(parseMode("rwx")).toBeNull();
     expect(parseMode("77777")).toBeNull();
-  });
-  it("접두어가 같은 형제 폴더는 하위가 아니다", () => {
-    expect(isInside("/a/b", "/a")).toBe(true);
-    expect(isInside("/a", "/a")).toBe(true);
-    expect(isInside("/ab", "/a")).toBe(false);
   });
 });

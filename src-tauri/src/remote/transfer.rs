@@ -244,14 +244,7 @@ async fn upload(s: &mut Session, dest: &str, local: &[PathBuf], env: Env) -> App
         let target = path::join(&remote_parent, name);
         if item.dir {
             // 이미 있는 폴더는 질문 없이 합친다 (안의 파일은 각각 확인)
-            match s.stat(&target).await? {
-                Some((e, _)) if !e.dir => return Err(AppError::user(format!("같은 이름의 파일이 있어 폴더를 만들 수 없습니다: {target}"))),
-                Some(_) => {}
-                None => {
-                    s.mkdir(&target).await?;
-                    cache.insert(target.clone(), HashSet::new());
-                }
-            }
+            ensure_dir(s, &mut cache, &target).await?;
             continue;
         }
         let chosen = {
@@ -262,7 +255,7 @@ async fn upload(s: &mut Session, dest: &str, local: &[PathBuf], env: Env) -> App
         let target = path::join(&remote_parent, &chosen);
         ctx.begin(&item.rel);
         let f = tokio::fs::File::open(&item.src).await.map_err(|e| AppError::user(format!("{}: {e}", item.src.display())))?;
-        s.upload(&target, f, item.size, ctx.counter()).await?;
+        s.upload(&target, f, ctx.counter()).await?;
         if let Some(c) = cache.get_mut(&remote_parent) {
             c.insert(chosen);
         }
@@ -394,14 +387,14 @@ async fn download(s: &mut Session, paths: &[String], target: &Path, env: Env) ->
 }
 
 /// FTP/SFTP 는 서버 복사 명령이 없어 세션 두 개로 내려받는 즉시 올린다 (임시 파일 없음)
-async fn stream_copy(src: &mut Session, dst: &mut Session, from: &str, to: &str, len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+async fn stream_copy(src: &mut Session, dst: &mut Session, from: &str, to: &str, counter: Arc<AtomicU64>) -> AppResult<()> {
     let (mut w, r) = tokio::io::duplex(256 * 1024);
     let down = async {
         src.download(from, &mut w, Arc::new(AtomicU64::new(0))).await?;
         w.shutdown().await.map_err(|e| AppError::Remote(e.to_string()))?; // EOF 를 알려야 업로드가 끝난다
         AppResult::Ok(())
     };
-    let up = dst.upload(to, r, len, counter);
+    let up = dst.upload(to, r, counter);
     tokio::try_join!(down, up)?;
     Ok(())
 }
@@ -427,7 +420,7 @@ impl Copier {
                 let open = self.opener.take().ok_or_else(|| AppError::user("복사용 두 번째 접속을 열 수 없습니다."))?;
                 self.second = Some(open().await?);
             }
-            stream_copy(s, self.second.as_mut().unwrap(), from, to, size, ctx.counter()).await?;
+            stream_copy(s, self.second.as_mut().unwrap(), from, to, ctx.counter()).await?;
         }
         ctx.file_done();
         Ok(())

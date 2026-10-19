@@ -159,11 +159,11 @@ impl Session {
         }
     }
 
-    pub async fn upload(&mut self, path: &str, reader: impl AsyncRead + Unpin + Send, len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+    pub async fn upload(&mut self, path: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
         match self {
-            Self::Sftp(s) => s.upload(path, reader, len, counter).await,
-            Self::Ftp(s) => s.upload(path, reader, len, counter).await,
-            Self::S3(s) => s.upload(path, reader, len, counter).await,
+            Self::Sftp(s) => s.upload(path, reader, counter).await,
+            Self::Ftp(s) => s.upload(path, reader, counter).await,
+            Self::S3(s) => s.upload(path, reader, counter).await,
         }
     }
 

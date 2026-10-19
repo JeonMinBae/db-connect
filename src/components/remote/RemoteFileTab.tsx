@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../../api";
 import type { ConnectionConfig, OpenText, RemoteStamp, TextMeta } from "../../api/types";
 import { loadLanguage } from "../../remote/language";
+import { baseName } from "../../remote/path";
 import { useTabs } from "../../store/tabs";
 import { confirmDialog, toast } from "../../store/ui";
 import type { Scheme } from "../../theme";
@@ -14,7 +15,6 @@ type Loaded =
   | { t: "TooLarge"; size: number };
 
 const DIRTY_REASON = "저장하지 않은 변경이 있습니다";
-const baseName = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 
 export const RemoteFileTab = memo(function RemoteFileTab(props: { tabId: string; cfg: ConnectionConfig; path: string; scheme: Scheme; active: boolean }) {
   const { tabId, cfg, path } = props;

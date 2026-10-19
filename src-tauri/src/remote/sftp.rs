@@ -178,8 +178,8 @@ impl SftpSession {
         Ok(self.sftp.symlink_metadata(path::normalize(p)).await.map_err(sftp_err)?.is_symlink())
     }
 
-    /// 원격 파일을 만들어(있으면 덮어씀) 채운다. len 은 서버에 미리 알릴 방법이 없어 쓰지 않는다.
-    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, _len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+    /// 원격 파일을 만들어(있으면 덮어씀) 채운다.
+    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
         let mut f = self.sftp.create(path::normalize(p)).await.map_err(sftp_err)?;
         let mut r = Counting::new(reader, counter);
         tokio::io::copy(&mut r, &mut f).await.map_err(|e| AppError::Remote(e.to_string()))?;
@@ -203,7 +203,7 @@ impl SftpSession {
     }
 
     pub async fn write_all(&mut self, p: &str, bytes: &[u8]) -> AppResult<()> {
-        self.upload(p, bytes, bytes.len() as u64, Default::default()).await
+        self.upload(p, bytes, Default::default()).await
     }
 
     pub async fn download(&mut self, p: &str, writer: impl AsyncWrite + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {

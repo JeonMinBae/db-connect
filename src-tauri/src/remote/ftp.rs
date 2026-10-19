@@ -300,7 +300,7 @@ impl FtpSession {
         Ok(self.find(p).await?.is_some_and(|(_, link)| link))
     }
 
-    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, _len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
+    pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
         let mut data = ctl(self.ftp.put_with_stream(path::normalize(p))).await.map_err(ftp_err)?;
         let mut r = Counting::new(reader, counter);
         // 복사가 실패하면 data 가 drop 되며 전송이 중단 처리된다
@@ -335,7 +335,7 @@ impl FtpSession {
     }
 
     pub async fn write_all(&mut self, p: &str, bytes: &[u8]) -> AppResult<()> {
-        self.upload(p, bytes, bytes.len() as u64, Default::default()).await
+        self.upload(p, bytes, Default::default()).await
     }
 }
 
