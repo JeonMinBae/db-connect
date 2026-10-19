@@ -836,3 +836,72 @@ pre.raw-sql {
   max-height: 60vh;
   overflow-y: auto;
 }
+
+/* 원격 파일 브라우저 */
+.remote-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.remote-path {
+  flex: 1;
+  min-width: 80px;
+}
+.remote-filter {
+  width: 140px;
+}
+.remote-footer:empty {
+  display: none;
+}
+.file-list {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  position: relative;
+  outline: none;
+  user-select: none;
+}
+.file-list table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.file-list th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 2px 8px;
+  font-weight: normal;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.file-list td {
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.file-list td:first-child {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-list .num {
+  text-align: right;
+}
+.file-list .mono {
+  font-family: monospace;
+}
+.file-list tbody tr:hover {
+  background: var(--bg-3);
+}
+.file-list tbody tr.selected {
+  background: var(--sel);
+}
+.file-list-loading {
+  position: absolute;
+  top: 24px;
+  right: 8px;
+  color: var(--muted);
+}

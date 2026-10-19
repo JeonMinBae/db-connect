@@ -11,6 +11,7 @@ import { DropTableHost } from "./components/DropTableDialog";
 import { ExportProgressHost } from "./components/exportMenu";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
+import { BrowserTab } from "./components/remote/BrowserTab";
 import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
 import { useTabs, type Tab } from "./store/tabs";
 import { useColorScheme, type Scheme } from "./theme";
@@ -36,8 +37,11 @@ function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionCon
     if (t.kind === "console") return <MongoConsoleTab tabId={t.id} cfg={cfg} scheme={scheme} active={active} />;
     if (t.kind === "mongoColl") return <MongoCollTab tabId={t.id} cfg={cfg} db={t.db} coll={t.coll} scheme={scheme} active={active} />;
   }
-  // 브라우저·편집 탭 컴포넌트는 이후 작업에서 연결한다
-  if (isRemote(cfg.driver)) return <div className="empty">준비 중</div>;
+  if (isRemote(cfg.driver)) {
+    if (t.kind === "remoteBrowser") return <BrowserTab tabId={t.id} cfg={cfg} active={active} />;
+    // 편집 탭은 이후 작업에서 연결한다
+    return <div className="empty">준비 중</div>;
+  }
   return <div className="empty">이 접속에서는 열 수 없는 탭입니다</div>;
 }
 
