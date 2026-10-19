@@ -40,7 +40,7 @@ export function blankConfig(): ConnectionConfig {
 
 type S3Preset = "aws" | "r2" | "minio" | "custom";
 const S3_PRESETS: Record<Exclude<S3Preset, "custom">, Pick<ConnectionConfig, "s3_endpoint" | "s3_region" | "s3_path_style">> = {
-  aws: { s3_endpoint: "", s3_region: "ap-northeast-2", s3_path_style: false },
+  aws: { s3_endpoint: "", s3_region: "", s3_path_style: false },
   r2: { s3_endpoint: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com", s3_region: "auto", s3_path_style: true },
   minio: { s3_endpoint: "http://localhost:9000", s3_region: "us-east-1", s3_path_style: true },
 };
@@ -285,7 +285,7 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
             <label>Endpoint</label>
             <input value={cfg.s3_endpoint} placeholder="비우면 AWS (https://s3.<리전>.amazonaws.com)" onChange={(e) => set("s3_endpoint", e.target.value)} />
             <label>Region</label>
-            <input value={cfg.s3_region} placeholder="예: ap-northeast-2" onChange={(e) => set("s3_region", e.target.value)} />
+            <input value={cfg.s3_region} placeholder="AWS 는 비우면 버킷마다 자동 감지" onChange={(e) => set("s3_region", e.target.value)} />
             <label>Access Key</label>
             <input value={cfg.user} onChange={(e) => set("user", e.target.value)} />
             {passwordRow}

@@ -36,7 +36,10 @@ pub fn locate(bucket: &str, prefix: &str, path: &str) -> Loc {
 }
 
 pub struct S3Session {
+    /// 설정 리전. 버킷 목록과 리전 감지 실패 시에 쓴다
     region: Region,
+    /// AWS 접속일 때만 있다. 버킷별 리전 감지용
+    probe: Option<reqwest::Client>,
     creds: Credentials,
     path_style: bool,
     bucket: String,
@@ -61,6 +64,9 @@ fn s3_err(e: S3Error) -> AppError {
                 return AppError::user("인증에 실패했습니다. Access Key·Secret Key 를 확인하세요.");
             }
             let detail = if code.is_empty() { body.trim().to_string() } else { format!("{code}: {msg}") };
+            if code == "PermanentRedirect" {
+                return AppError::Remote(format!("S3 오류 ({status}) 버킷이 다른 리전에 있습니다. 접속 설정의 리전을 버킷 리전으로 바꾸세요. ({detail})"));
+            }
             AppError::Remote(format!("S3 오류 ({status}) {detail}").trim().to_string())
         }
         S3Error::Reqwest(re) if re.is_connect() || re.is_timeout() || re.is_request() || re.is_body() => AppError::Disconnected(re.to_string()),
@@ -118,6 +124,18 @@ fn dir_stamp() -> Stamp {
     Stamp { size: 0, mtime: None, etag: None }
 }
 
+/// AWS 는 버킷이 다른 리전이면 301 을 돌려준다. 서명 없는 HEAD 에도 200·301·403 모두
+/// x-amz-bucket-region 헤더로 실제 리전을 알려 주므로 키 없이 물어본다.
+/// 점이 든 버킷 이름은 가상 호스트 방식이면 인증서가 맞지 않아 경로 방식으로 묻는다.
+async fn detect_region(http: &reqwest::Client, bucket: &str) -> Option<String> {
+    let r = http.head(format!("https://s3.amazonaws.com/{bucket}")).send().await.ok()?;
+    r.headers().get("x-amz-bucket-region")?.to_str().ok().map(str::to_string)
+}
+
+fn aws_region(name: &str) -> Region {
+    Region::Custom { region: name.to_string(), endpoint: format!("https://s3.{name}.amazonaws.com") }
+}
+
 /// S3 키 → 요청 경로 (라이브러리가 선행 '/' 를 떼고 URL 인코딩한다)
 fn rp(key: &str) -> String {
     format!("/{key}")
@@ -126,14 +144,18 @@ fn rp(key: &str) -> String {
 impl S3Session {
     pub async fn open(cfg: &ConnectionConfig, secret: Option<&str>) -> AppResult<Self> {
         let region_name = if cfg.s3_region.trim().is_empty() { "us-east-1" } else { cfg.s3_region.trim() };
-        let endpoint = match cfg.s3_endpoint.trim().trim_end_matches('/') {
-            "" => format!("https://s3.{region_name}.amazonaws.com"),
-            e => e.to_string(),
+        let (region, probe) = match cfg.s3_endpoint.trim().trim_end_matches('/') {
+            // 사이버덕처럼 전역 주소를 적은 경우도 AWS 로 본다
+            "" | "https://s3.amazonaws.com" => {
+                let http = reqwest::Client::builder().timeout(std::time::Duration::from_secs(10)).build().map_err(|e| AppError::Remote(e.to_string()))?;
+                (aws_region(region_name), Some(http))
+            }
+            e => (Region::Custom { region: region_name.to_string(), endpoint: e.to_string() }, None),
         };
-        let region = Region::Custom { region: region_name.to_string(), endpoint };
         let creds = Credentials::new(Some(cfg.user.as_str()), Some(secret.unwrap_or("")), None, None, None).map_err(|e| s3_err(e.into()))?;
         Ok(Self {
             region,
+            probe,
             creds,
             path_style: cfg.s3_path_style,
             bucket: cfg.s3_bucket.trim().to_string(),
@@ -146,24 +168,34 @@ impl S3Session {
         locate(&self.bucket, &self.prefix, p)
     }
 
-    fn bucket(&mut self, name: &str) -> AppResult<Box<Bucket>> {
+    async fn bucket(&mut self, name: &str) -> AppResult<Box<Bucket>> {
         if let Some(b) = self.buckets.get(name) {
             return Ok(b.clone());
         }
-        let mut b = Bucket::new(name, self.region.clone(), self.creds.clone()).map_err(s3_err)?;
+        let (region, cache) = match &self.probe {
+            Some(http) => match detect_region(http, name).await {
+                Some(r) => (aws_region(&r), true),
+                // 감지 실패(일시적 네트워크 오류 등)면 설정 리전으로 시도하고, 다음 요청 때 다시 감지한다
+                None => (self.region.clone(), false),
+            },
+            None => (self.region.clone(), true),
+        };
+        let mut b = Bucket::new(name, region, self.creds.clone()).map_err(s3_err)?;
         if self.path_style {
             b = b.with_path_style();
         }
-        self.buckets.insert(name.to_string(), b.clone());
+        if cache {
+            self.buckets.insert(name.to_string(), b.clone());
+        }
         Ok(b)
     }
 
     /// 버킷 안의 객체 위치만 허용한다 (버킷 목록·버킷 자체는 변경 불가)
-    fn target(&mut self, p: &str) -> AppResult<(Box<Bucket>, String)> {
+    async fn target(&mut self, p: &str) -> AppResult<(Box<Bucket>, String)> {
         match self.loc(p) {
             Loc::Buckets => Err(AppError::user("버킷 목록에서는 변경할 수 없습니다")),
             Loc::Bucket { key, .. } if key.is_empty() => Err(AppError::user("버킷 자체는 만들거나 지우거나 이름을 바꿀 수 없습니다")),
-            Loc::Bucket { bucket, key } => Ok((self.bucket(&bucket)?, key)),
+            Loc::Bucket { bucket, key } => Ok((self.bucket(&bucket).await?, key)),
         }
     }
 
@@ -176,7 +208,7 @@ impl S3Session {
     pub async fn list(&mut self, p: &str) -> AppResult<Vec<Entry>> {
         let (bucket, key) = match self.loc(p) {
             Loc::Buckets => return self.list_buckets().await,
-            Loc::Bucket { bucket, key } => (self.bucket(&bucket)?, key),
+            Loc::Bucket { bucket, key } => (self.bucket(&bucket).await?, key),
         };
         let prefix = if key.is_empty() { String::new() } else { format!("{key}/") };
         // list 가 continuation token 으로 모든 페이지를 읽는다
@@ -204,7 +236,7 @@ impl S3Session {
     pub async fn stat(&mut self, p: &str) -> AppResult<Option<(Entry, Stamp)>> {
         let (bucket, key) = match self.loc(p) {
             Loc::Buckets => return Ok(Some((dir_entry(String::new()), dir_stamp()))),
-            Loc::Bucket { bucket, key } => (self.bucket(&bucket)?, key),
+            Loc::Bucket { bucket, key } => (self.bucket(&bucket).await?, key),
         };
         let name = path::name(&path::normalize(p)).to_string();
         if key.is_empty() {
@@ -227,7 +259,7 @@ impl S3Session {
     }
 
     pub async fn mkdir(&mut self, p: &str) -> AppResult<()> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         bucket.put_object(rp(&format!("{key}/")), b"").await.map_err(s3_err)?;
         Ok(())
     }
@@ -270,14 +302,14 @@ impl S3Session {
 
     /// 객체 하나를 복사한다 (폴더는 호출자가 객체 단위로 푼다). 버킷이 다르면 스트리밍.
     pub async fn server_copy(&mut self, from: &str, to: &str) -> AppResult<()> {
-        let (bucket, src) = self.target(from)?;
-        let (dst_bucket, dst) = self.target(to)?;
+        let (bucket, src) = self.target(from).await?;
+        let (dst_bucket, dst) = self.target(to).await?;
         Self::copy_between(&bucket, &src, &dst_bucket, &dst).await
     }
 
     pub async fn rename(&mut self, from: &str, to: &str) -> AppResult<()> {
-        let (bucket, src) = self.target(from)?;
-        let (dst_bucket, dst) = self.target(to)?;
+        let (bucket, src) = self.target(from).await?;
+        let (dst_bucket, dst) = self.target(to).await?;
         if self.stat(from).await?.is_some_and(|(e, _)| e.dir) {
             let (sp, dp) = (format!("{src}/"), format!("{dst}/"));
             let keys: Vec<String> = bucket
@@ -302,14 +334,14 @@ impl S3Session {
     }
 
     pub async fn remove_file(&mut self, p: &str) -> AppResult<()> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         bucket.delete_object(rp(&key)).await.map_err(s3_err)?;
         Ok(())
     }
 
     /// 마커 객체만 지운다 (없어도 S3 는 성공). 하위 객체는 ops::delete_tree 가 먼저 지운다.
     pub async fn remove_dir(&mut self, p: &str) -> AppResult<()> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         bucket.delete_object(rp(&format!("{key}/"))).await.map_err(s3_err)?;
         Ok(())
     }
@@ -319,21 +351,21 @@ impl S3Session {
     }
 
     pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         let mut r = Counting::new(reader, counter);
         bucket.put_object_stream(&mut r, rp(&key)).await.map_err(s3_err)?;
         Ok(())
     }
 
     pub async fn download(&mut self, p: &str, writer: impl AsyncWrite + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         let mut w = Counting::new(writer, counter);
         bucket.get_object_to_writer(rp(&key), &mut w).await.map_err(s3_err)?;
         w.flush().await.map_err(|e| AppError::Remote(e.to_string()))
     }
 
     pub async fn read_all(&mut self, p: &str, limit: u64) -> AppResult<Vec<u8>> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         let (h, _) = bucket.head_object(rp(&key)).await.map_err(s3_err)?;
         if h.content_length.unwrap_or(0).max(0) as u64 > limit {
             return Err(AppError::user("파일이 너무 큽니다"));
@@ -346,14 +378,14 @@ impl S3Session {
     }
 
     pub async fn write_all(&mut self, p: &str, bytes: &[u8]) -> AppResult<()> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         bucket.put_object(rp(&key), bytes).await.map_err(s3_err)?;
         Ok(())
     }
 
     /// 파일에 대한 GET 사전서명 URL
     pub async fn presign(&mut self, p: &str, expires_secs: u32) -> AppResult<String> {
-        let (bucket, key) = self.target(p)?;
+        let (bucket, key) = self.target(p).await?;
         match self.stat(p).await? {
             Some((e, _)) if !e.dir => {}
             _ => return Err(AppError::user("파일만 사전서명 URL 을 만들 수 있습니다")),
