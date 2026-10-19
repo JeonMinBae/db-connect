@@ -210,3 +210,22 @@ export interface RemoteEntry {
   mtime: number | null;
   perm: number | null;
 }
+
+export interface RemoteStamp {
+  size: number;
+  mtime: number | null;
+  etag: string | null;
+}
+
+export interface TextMeta {
+  encoding: "utf8" | "euc-kr";
+  bom: boolean;
+  crlf: boolean;
+}
+
+export type OpenText =
+  | { t: "Text"; text: string; meta: TextMeta; stamp: RemoteStamp }
+  | { t: "Binary" }
+  | { t: "TooLarge"; size: number };
+
+export type SaveText = { t: "Saved"; stamp: RemoteStamp } | { t: "Conflict" };

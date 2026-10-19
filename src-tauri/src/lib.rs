@@ -41,6 +41,8 @@ pub fn run() {
             commands::remote::remote_mkdir,
             commands::remote::remote_rename,
             commands::remote::remote_delete,
+            commands::remote::remote_open_text,
+            commands::remote::remote_save_text,
             commands::remote::transfer_start,
             commands::remote::transfer_answer,
             commands::meta::list_schemas,

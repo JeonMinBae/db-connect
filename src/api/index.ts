@@ -26,7 +26,7 @@ export interface RawStmt {
   /** UPDATE/DELETE: 정확히 1행에 영향을 줘야 한다 */
   expect_one: boolean;
 }
-import type { AppError, ColumnMeta, ConnectionConfig, DdlChoices, DdlPlan, ExecResult, IndexInfo, RemoteEntry, SnapshotTable, TableInfo, TableStructure } from "./types";
+import type { AppError, ColumnMeta, ConnectionConfig, DdlChoices, DdlPlan, ExecResult, IndexInfo, OpenText, RemoteEntry, RemoteStamp, SaveText, TextMeta, SnapshotTable, TableInfo, TableStructure } from "./types";
 
 /** 파일 경로는 넘기지 않는다. 백엔드가 대화상자로 고른다. */
 export interface BlobReq {
@@ -75,6 +75,9 @@ export const api = {
   remoteMkdir: (connId: string, path: string) => invoke<void>("remote_mkdir", { connId, path }),
   remoteRename: (connId: string, from: string, to: string) => invoke<void>("remote_rename", { connId, from, to }),
   remoteDelete: (connId: string, paths: string[]) => invoke<number>("remote_delete", { connId, paths }),
+  remoteOpenText: (connId: string, path: string) => invoke<OpenText>("remote_open_text", { connId, path }),
+  remoteSaveText: (connId: string, path: string, meta: TextMeta, text: string, expect: RemoteStamp, force: boolean) =>
+    invoke<SaveText>("remote_save_text", { connId, path, meta, text, expect, force }),
   transferStart: (connId: string, jobId: string, job: TransferJob) => invoke<TransferDone>("transfer_start", { connId, jobId, job }),
   transferAnswer: (askId: string, answer: TransferAnswer) => invoke<void>("transfer_answer", { askId, answer }),
 

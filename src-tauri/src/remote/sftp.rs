@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use russh::keys::{self, HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::protocol::StatusCode;
@@ -179,6 +179,25 @@ impl SftpSession {
         tokio::io::copy(&mut r, &mut f).await.map_err(|e| AppError::Remote(e.to_string()))?;
         // shutdown 이 핸들을 닫아야 서버에 데이터가 확정된다
         f.shutdown().await.map_err(|e| AppError::Remote(e.to_string()))
+    }
+
+    pub async fn read_all(&mut self, p: &str, limit: u64) -> AppResult<Vec<u8>> {
+        let mut f = self.sftp.open(path::normalize(p)).await.map_err(sftp_err)?;
+        let size = f.metadata().await.map_err(sftp_err)?.size.unwrap_or(0);
+        if size > limit {
+            return Err(AppError::user("파일이 너무 큽니다"));
+        }
+        let mut buf = Vec::with_capacity(size as usize);
+        // 열린 뒤 커진 파일도 limit 에서 끊는다
+        (&mut f).take(limit + 1).read_to_end(&mut buf).await.map_err(|e| AppError::Remote(e.to_string()))?;
+        if buf.len() as u64 > limit {
+            return Err(AppError::user("파일이 너무 큽니다"));
+        }
+        Ok(buf)
+    }
+
+    pub async fn write_all(&mut self, p: &str, bytes: &[u8]) -> AppResult<()> {
+        self.upload(p, bytes, bytes.len() as u64, Default::default()).await
     }
 
     pub async fn download(&mut self, p: &str, writer: impl AsyncWrite + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {

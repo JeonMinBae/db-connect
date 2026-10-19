@@ -5,6 +5,7 @@ pub mod ops;
 pub mod path;
 pub mod picks;
 pub mod sftp;
+pub mod text;
 pub mod transfer;
 #[cfg(test)]
 #[path = "it.rs"]
@@ -93,6 +94,20 @@ impl Session {
     pub async fn is_link(&mut self, path: &str) -> AppResult<bool> {
         match self {
             Self::Sftp(s) => s.is_link(path).await,
+        }
+    }
+
+    /// 메모리로 읽는다. limit 보다 크면 사용자 오류.
+    pub async fn read_all(&mut self, path: &str, limit: u64) -> AppResult<Vec<u8>> {
+        match self {
+            Self::Sftp(s) => s.read_all(path, limit).await,
+        }
+    }
+
+    /// 파일을 만들거나 비우고 bytes 로 채운다.
+    pub async fn write_all(&mut self, path: &str, bytes: &[u8]) -> AppResult<()> {
+        match self {
+            Self::Sftp(s) => s.write_all(path, bytes).await,
         }
     }
 

@@ -127,3 +127,33 @@ async fn sftp_transfer_roundtrip() {
     assert_eq!(ops::delete_tree(&mut s, &base).await.unwrap(), 4);
     assert!(s.stat(&base).await.unwrap().is_none());
 }
+
+#[tokio::test]
+#[ignore]
+async fn sftp_text_open_save_conflict() {
+    use crate::remote::text::{self, Enc, OpenText, SaveText};
+    let (mut s, _d) = trusted_sftp().await;
+    let p = format!("/upload/it-{}.txt", uuid::Uuid::new_v4());
+    let raw = b"\xC7\xD1\xB1\xDB\r\nabc\r\n";
+    s.write_all(&p, raw).await.unwrap();
+
+    let OpenText::Text { text, meta, stamp } = text::open_text(&mut s, &p).await.unwrap() else { panic!("Text 여야 한다") };
+    assert_eq!((meta.encoding, meta.crlf, meta.bom), (Enc::EucKr, true, false));
+    assert_eq!(text, "한글\nabc\n");
+
+    // 변경 없이 저장해도 바이트가 같다
+    let SaveText::Saved { stamp: saved } = text::save_text(&mut s, &p, meta, &text, &stamp, false).await.unwrap() else { panic!("Saved 여야 한다") };
+    assert_eq!(s.read_all(&p, 1024).await.unwrap(), raw);
+
+    // 다른 곳에서 바뀜 (SFTP mtime 이 초 단위라 크기를 바꾼다)
+    s.write_all(&p, b"changed elsewhere!!").await.unwrap();
+    assert_eq!(text::save_text(&mut s, &p, meta, "mine\n", &saved, false).await.unwrap(), SaveText::Conflict);
+    assert_eq!(s.read_all(&p, 1024).await.unwrap(), b"changed elsewhere!!");
+    assert!(matches!(text::save_text(&mut s, &p, meta, "mine\n", &saved, true).await.unwrap(), SaveText::Saved { .. }));
+    assert_eq!(s.read_all(&p, 1024).await.unwrap(), b"mine\r\n".as_slice());
+
+    // 제한 초과 / 사라진 파일
+    assert!(matches!(s.read_all(&p, 2).await, Err(AppError::User(_))));
+    s.remove_file(&p).await.unwrap();
+    assert_eq!(text::save_text(&mut s, &p, meta, "x", &saved, false).await.unwrap(), SaveText::Conflict);
+}

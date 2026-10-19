@@ -6,7 +6,8 @@ use crate::commands::edit::{pick_files, pick_folder, pick_path};
 use crate::error::{AppError, AppResult};
 use crate::remote::picks::Pick;
 use crate::remote::transfer::{self, Answer, Env, Job, Progress, TransferDone};
-use crate::remote::{known_hosts, ops, path, Entry};
+use crate::remote::text::{self, OpenText, SaveText, TextMeta};
+use crate::remote::{known_hosts, ops, path, Entry, Stamp};
 use crate::state::AppState;
 
 /// 사용자가 확인한 호스트 키를 저장한다 (이후 접속은 이 지문과 비교)
@@ -184,4 +185,35 @@ mod tests {
         assert!(reject_root("").is_err());
         assert_eq!(reject_root("/a//b/").unwrap(), "/a/b");
     }
+}
+
+#[tauri::command]
+pub async fn remote_open_text(state: State<'_, AppState>, conn_id: String, path: String) -> AppResult<OpenText> {
+    let r = state.remote(&conn_id).await?;
+    let path = path::normalize(&path);
+    r.run(|s| {
+        let path = path.clone();
+        Box::pin(async move { text::open_text(s, &path).await })
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn remote_save_text(
+    state: State<'_, AppState>,
+    conn_id: String,
+    path: String,
+    meta: TextMeta,
+    text: String,
+    expect: Stamp,
+    force: bool,
+) -> AppResult<SaveText> {
+    let r = state.remote(&conn_id).await?;
+    r.check_write()?;
+    let path = reject_root(&path)?;
+    r.run(|s| {
+        let (path, text, expect) = (path.clone(), text.clone(), expect.clone());
+        Box::pin(async move { text::save_text(s, &path, meta, &text, &expect, force).await })
+    })
+    .await
 }
