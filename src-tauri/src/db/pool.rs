@@ -114,11 +114,22 @@ impl DbPool {
 
 const MY_READ_ONLY: &str = "SET SESSION TRANSACTION READ ONLY";
 
+/// "localhost"는 ::1 부터 시도되는데, Docker Desktop 등에서 IPv6 포워딩이 막히면
+/// ::1 연결이 응답 없이 ~21초 걸려 acquire_timeout(10초) 안에 127.0.0.1 로 넘어가지 못한다.
+/// VerifyFull 은 인증서 호스트명 검증이 필요하므로 그대로 둔다.
+fn connect_host(cfg: &ConnectionConfig) -> &str {
+    if cfg.host.eq_ignore_ascii_case("localhost") && cfg.ssl_mode != SslMode::VerifyFull {
+        "127.0.0.1"
+    } else {
+        &cfg.host
+    }
+}
+
 pub fn build_opts(cfg: &ConnectionConfig, pw: Option<&str>) -> AppResult<ConnectOpts> {
     Ok(match cfg.driver {
         Driver::Postgres => {
             let mut o = PgConnectOptions::new()
-                .host(&cfg.host)
+                .host(connect_host(cfg))
                 .port(cfg.port)
                 .username(&cfg.user)
                 .application_name("db-connect")
@@ -145,7 +156,7 @@ pub fn build_opts(cfg: &ConnectionConfig, pw: Option<&str>) -> AppResult<Connect
         }
         Driver::Mysql => {
             let mut o = MySqlConnectOptions::new()
-                .host(&cfg.host)
+                .host(connect_host(cfg))
                 .port(cfg.port)
                 .username(&cfg.user)
                 .charset("utf8mb4")
@@ -259,4 +270,19 @@ pub async fn default_schema(pool: &DbPool) -> AppResult<String> {
         }
         DbPool::Lite(_) => "main".to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localhost_prefers_ipv4_unless_hostname_verified() {
+        let mut cfg = ConnectionConfig { host: "LocalHost".into(), ..Default::default() };
+        assert_eq!(connect_host(&cfg), "127.0.0.1");
+        cfg.ssl_mode = SslMode::VerifyFull;
+        assert_eq!(connect_host(&cfg), "LocalHost");
+        cfg = ConnectionConfig { host: "db.example.com".into(), ..Default::default() };
+        assert_eq!(connect_host(&cfg), "db.example.com");
+    }
 }
