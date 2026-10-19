@@ -45,7 +45,7 @@ type TableRef = { schema: string | null; table: string } | null;
 
 /** 복사 항목. 선택이 없으면 현재 페이지 전체 */
 export function copyMenuItems(grid: GridApi, columns: ColumnInfo[], cfg: SqlConfig, table: TableRef): MenuEntry[] {
-  const sel = () => slice(columns, grid.getRow, grid.rowCount, grid.range, grid.rows);
+  const sel = () => slice(columns, grid.getRow, grid.rowCount, grid.range, grid.rows, grid.rangeCols);
   const tableName = table ? qualified(cfg.driver, table.schema, table.table) : "<table>";
   const scope = grid.range && grid.range.width * grid.range.height > 1 ? "선택 영역" : grid.rows.length ? "선택 행" : "현재 페이지";
   return [

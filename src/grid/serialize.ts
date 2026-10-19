@@ -22,20 +22,27 @@ export interface Slice {
   rows: Cell[][];
 }
 
-/** 선택 범위(없으면 전체)를 잘라 낸다. rowsSel은 행 마커로 고른 행들. */
+/**
+ * 선택 범위(없으면 전체)를 잘라 낸다. rowsSel은 행 마커로 고른 행들.
+ * colIdx: 범위가 덮는 데이터 컬럼 (화면에서 컬럼 순서를 바꿨을 때). 없으면 range.x 부터 연속
+ */
 export function slice(
   columns: ColumnInfo[],
   getRow: (r: number) => Cell[],
   rowCount: number,
   range: { x: number; y: number; width: number; height: number } | null,
   rowsSel: number[],
+  colIdx?: number[],
 ): Slice {
   if (rowsSel.length && (!range || range.width * range.height <= 1)) return { columns, rows: rowsSel.map(getRow) };
   if (!range || range.width * range.height <= 1) return { columns, rows: Array.from({ length: rowCount }, (_, i) => getRow(i)) };
-  const cols = columns.slice(range.x, range.x + range.width);
+  const idx = colIdx ?? Array.from({ length: range.width }, (_, i) => range.x + i);
   const rows: Cell[][] = [];
-  for (let y = range.y; y < range.y + range.height; y++) rows.push(getRow(y).slice(range.x, range.x + range.width));
-  return { columns: cols, rows };
+  for (let y = range.y; y < range.y + range.height; y++) {
+    const r = getRow(y);
+    rows.push(idx.map((c) => r[c]));
+  }
+  return { columns: idx.map((c) => columns[c]), rows };
 }
 
 const plain = (c: Cell): string | null => (c.t === "Text" ? c.v : null);

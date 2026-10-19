@@ -22,6 +22,12 @@ describe("serialize", () => {
     expect(slice(columns, get, 3, null, [2]).rows).toEqual([rows[2]]);
   });
 
+  it("slices the given data columns when the grid columns were reordered", () => {
+    const get = (r: number) => rows[r];
+    // 화면에서 pic, id 순으로 옮겨 고른 범위 → 원래 순서(id, pic)로 잘라 낸다
+    expect(slice(columns, get, 3, { x: 0, y: 0, width: 2, height: 1 }, [], [0, 2])).toEqual({ columns: [columns[0], columns[2]], rows: [[text("1"), { t: "Blob", v: 3 }]] });
+  });
+
   it("writes TSV", () => {
     expect(toTsv({ columns, rows: [rows[1]] }, true)).toBe("id\tname\tpic\r\n2\t\t");
   });

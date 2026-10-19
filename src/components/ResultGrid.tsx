@@ -33,6 +33,8 @@ export interface GridEdit {
 export interface GridApi {
   /** 선택 범위 (표시 좌표, 없으면 null) */
   range: { x: number; y: number; width: number; height: number } | null;
+  /** range 가 덮는 데이터 컬럼들 (원래 순서). 화면에서 컬럼 순서를 바꿔도 복사·내보내기는 이 순서를 쓴다 */
+  rangeCols: number[];
   /** 행 마커로 고른 표시 행들 */
   rows: number[];
   /** 표시 행의 현재 값 (보류 변경 반영) */
@@ -83,19 +85,36 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
 }>(function ResultGrid(props, handle) {
   const { columns: cols, scheme, edit } = props;
   const ref = useRef<DataEditorRef>(null);
+  /** 데이터 컬럼별 너비 (순서를 바꿔도 컬럼을 따라간다) */
   const [widths, setWidths] = useState<Record<number, number>>({});
   const [sel, setSel] = useState<GridSelection>(emptySel);
+  // 헤더를 끌어 바꾼 표시 순서: 표시 위치 → 데이터 컬럼. 화면에서만 바뀌며, 결과를 새로 받으면(rows 가 바뀌면) 원래 순서로 돌아간다
+  const [moved, setMoved] = useState<{ rows: Cell[][]; order: number[] } | null>(null);
+  const colOrder = useMemo(
+    () => (moved && moved.rows === props.rows ? moved.order : cols.map((_, i) => i)),
+    [moved, props.rows, cols],
+  );
+  /** 표시 컬럼 → 데이터 컬럼. Glide 가 넘기는 컬럼 번호는 모두 표시 좌표라 이것으로 바꿔 쓴다 */
+  const dc = (x: number) => colOrder[x] ?? x;
   const auto = useMemo(() => columnWidths(cols, props.rows), [cols, props.rows]);
   const columns: GridColumn[] = useMemo(
     () =>
-      cols.map((c, i) => ({
+      colOrder.map((i) => ({
         id: String(i),
-        title: c.name + (props.headerSuffix?.(i) ?? ""),
+        title: cols[i].name + (props.headerSuffix?.(i) ?? ""),
         width: widths[i] ?? auto[i] + (props.pkCols?.[i] ? 20 : 0),
         icon: props.pkCols?.[i] ? "pk" : undefined,
       })),
-    [cols, widths, auto, props.headerSuffix, props.pkCols],
+    [cols, colOrder, widths, auto, props.headerSuffix, props.pkCols],
   );
+  const onColumnMoved = (from: number, to: number) => {
+    const order = [...colOrder];
+    const [c] = order.splice(from, 1);
+    order.splice(to, 0, c);
+    setMoved({ rows: props.rows, order });
+    // 선택 범위는 표시 좌표라 옮긴 뒤에는 다른 칸을 가리키므로 푼다
+    setSel(emptySel);
+  };
   const colors = cellColors[scheme];
   const p = edit?.pending;
   const rowCount = p ? p.rowCount : props.rows.length;
@@ -117,7 +136,8 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
 
   // 함수가 바뀌면 Glide가 그리드 전체를 다시 그리므로, 내용이 바뀔 때만 새로 만든다
   const getCellContent = useCallback(
-    ([col, displayRow]: Item) => {
+    ([x, displayRow]: Item) => {
+      const col = dc(x);
       const row = d(displayRow);
       if (!p) return toGridCell(props.rows[row][col], numericCols[col], false, { muted: colors.muted });
       const state = p.stateOf(row, col);
@@ -145,7 +165,7 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
       }
       return cell;
     },
-    [props.rows, props.version, edit, order, numericCols, scheme],
+    [props.rows, props.version, edit, order, numericCols, scheme, colOrder],
   );
 
   const applyEdit = (col: number, row: number, v: Cell) => {
@@ -171,7 +191,7 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
     const out: [number, number][] = [];
     if (sel.current) {
       const r = sel.current.range;
-      for (let y = r.y; y < r.y + r.height; y++) for (let x = r.x; x < r.x + r.width; x++) out.push([x, d(y)]);
+      for (let y = r.y; y < r.y + r.height; y++) for (let x = r.x; x < r.x + r.width; x++) out.push([dc(x), d(y)]);
     }
     for (const y of sel.rows.toArray()) for (let x = 0; x < cols.length; x++) out.push([x, d(y)]);
     return out;
@@ -242,8 +262,10 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
     }
   };
 
+  const range = sel.current?.range ?? null;
   const gridApi: GridApi = {
-    range: sel.current?.range ?? null,
+    range,
+    rangeCols: range ? colOrder.slice(range.x, range.x + range.width).sort((a, b) => a - b) : [],
     rows: sel.rows.toArray(),
     getRow: (r) => cols.map((_, c) => (p ? p.value(d(r), c) : props.rows[d(r)][c])),
     rowCount,
@@ -280,13 +302,14 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
         gridSelection={sel}
         onGridSelectionChange={setSel}
         rowMarkers={{ kind: "clickable-number", startIndex: props.rowOffset + 1, width: 56 }}
-        onColumnResize={(_c, w, idx) => setWidths((s) => ({ ...s, [idx]: w }))}
-        onHeaderClicked={props.onHeaderClicked ? (col, ev) => props.onHeaderClicked!(col, ev.shiftKey) : undefined}
+        onColumnResize={(_c, w, x) => setWidths((s) => ({ ...s, [dc(x)]: w }))}
+        onColumnMoved={onColumnMoved}
+        onHeaderClicked={props.onHeaderClicked ? (x, ev) => props.onHeaderClicked!(dc(x), ev.shiftKey) : undefined}
         onCellEdited={
           edit
-            ? ([col, row]: Item, v: EditableGridCell) => {
+            ? ([x, row]: Item, v: EditableGridCell) => {
                 if (v.kind !== GridCellKind.Text) return;
-                mutate(() => applyEdit(col, d(row), { t: "Text", v: v.data }));
+                mutate(() => applyEdit(dc(x), d(row), { t: "Text", v: v.data }));
               }
             : undefined
         }
@@ -295,7 +318,7 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
             ? (list) => {
                 // 붙여넣기 한 번 = 실행 취소 한 단계
                 mutate(() => {
-                  for (const { location, value } of list) if (value.kind === GridCellKind.Text) applyEdit(location[0], d(location[1]), { t: "Text", v: value.data });
+                  for (const { location, value } of list) if (value.kind === GridCellKind.Text) applyEdit(dc(location[0]), d(location[1]), { t: "Text", v: value.data });
                 });
                 return true;
               }
