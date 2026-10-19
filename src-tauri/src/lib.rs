@@ -1,6 +1,7 @@
 mod commands;
 mod db;
 mod error;
+mod remote;
 mod state;
 mod store;
 
@@ -24,6 +25,8 @@ pub fn run() {
             commands::conn::test_connection,
             commands::conn::connect,
             commands::conn::disconnect,
+            commands::remote::remote_trust_host,
+            commands::remote::pick_key_file,
             commands::meta::list_schemas,
             commands::meta::list_tables,
             commands::meta::list_columns,

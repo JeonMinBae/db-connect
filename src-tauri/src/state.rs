@@ -9,6 +9,7 @@ use crate::db::mongo::MongoConn;
 use crate::db::pool::{AnyConn, ConnectOpts, DbConn, DbPool, Pooled};
 use crate::db::redis::RedisConn;
 use crate::error::{AppError, AppResult};
+use crate::remote::RemoteConn;
 use crate::store::config::ConnectionConfig;
 
 pub struct Connected {
@@ -75,6 +76,7 @@ pub struct AppState {
     pub cancels: cancel::Registry,
     pub redis: RwLock<HashMap<String, Arc<RedisConn>>>,
     pub mongo: RwLock<HashMap<String, Arc<MongoConn>>>,
+    pub remote: RwLock<HashMap<String, Arc<RemoteConn>>>,
     /// Redis·MongoDB 실행 중인 작업 (exec_id → 중지 핸들)
     pub aborts: Mutex<HashMap<String, tokio::task::AbortHandle>>,
 }
@@ -88,6 +90,7 @@ impl AppState {
             cancels: cancel::Registry::default(),
             redis: RwLock::new(HashMap::new()),
             mongo: RwLock::new(HashMap::new()),
+            remote: RwLock::new(HashMap::new()),
             aborts: Mutex::new(HashMap::new()),
         }
     }
@@ -124,6 +127,10 @@ impl AppState {
 
     pub async fn mongo(&self, conn_id: &str) -> AppResult<Arc<MongoConn>> {
         self.mongo.read().await.get(conn_id).cloned().ok_or_else(|| AppError::user("MongoDB에 연결되어 있지 않습니다. 먼저 접속하세요."))
+    }
+
+    pub async fn remote(&self, conn_id: &str) -> AppResult<Arc<RemoteConn>> {
+        self.remote.read().await.get(conn_id).cloned().ok_or_else(|| AppError::user("파일 서버에 연결되어 있지 않습니다. 먼저 접속하세요."))
     }
 
     /// Redis·MongoDB 작업을 중지할 수 있게 별도 태스크로 실행한다. 중지되면 오류를 돌려준다.

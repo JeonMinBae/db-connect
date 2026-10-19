@@ -1,0 +1,7 @@
+# 원격 파일 통합 테스트용 서버: docker compose -f fixtures/remote/docker-compose.yml up -d
+services:
+  sftp:
+    image: atmoz/sftp
+    command: test:test:::upload
+    ports:
+      - "2222:22"
