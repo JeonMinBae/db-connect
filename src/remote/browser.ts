@@ -1,7 +1,7 @@
 import type { RemoteEntry } from "../api/types";
 import { parent } from "./path";
 
-export type SortKey = "name" | "size" | "mtime";
+export type SortKey = "name" | "size" | "mtime" | "perm";
 
 /** 폴더는 정렬 방향과 무관하게 항상 위 */
 export function sortEntries(list: RemoteEntry[], key: SortKey, asc: boolean): RemoteEntry[] {
@@ -9,9 +9,16 @@ export function sortEntries(list: RemoteEntry[], key: SortKey, asc: boolean): Re
   const byName = (a: RemoteEntry, b: RemoteEntry) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
   return [...list].sort((a, b) => {
     if (a.dir !== b.dir) return a.dir ? -1 : 1;
-    const d = key === "name" ? byName(a, b) : key === "size" ? a.size - b.size : (a.mtime ?? 0) - (b.mtime ?? 0);
+    const d =
+      key === "name" ? byName(a, b) : key === "size" ? a.size - b.size : key === "perm" ? (a.perm ?? -1) - (b.perm ?? -1) : (a.mtime ?? 0) - (b.mtime ?? 0); // perm: 없음(null)이 가장 앞
     return d ? sign * d : byName(a, b); // 동률은 방향과 무관하게 이름 오름차순
   });
+}
+
+/** 끌기 대상 이름. Ctrl 로 시작한 끌기는 선택에 없던 행을 선택에 더하고, 일반 끌기는 선택에 없으면 그 행만 */
+export function dragNames(selected: string[], name: string, additive: boolean): string[] {
+  if (selected.includes(name)) return selected;
+  return additive ? [...selected, name] : [name];
 }
 
 export function visibleEntries(list: RemoteEntry[], opt: { showHidden: boolean; filter: string }) {

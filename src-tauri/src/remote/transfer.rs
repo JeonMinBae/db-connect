@@ -298,16 +298,32 @@ impl Drop for PartGuard {
     }
 }
 
+/// 같은 폴더에 작업마다 다른 임시 이름을 쓴다 (기존 사용자 파일을 건드리지 않기 위해)
 fn part_path(target: &Path) -> PathBuf {
-    let mut n = target.as_os_str().to_os_string();
-    n.push(".part");
-    PathBuf::from(n)
+    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let id = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    target.with_file_name(format!(".{name}.{id}.part"))
+}
+
+/// 원격 이름은 신뢰할 수 없으므로 로컬 경로 한 칸으로 써도 안전한지 확인한다.
+/// ':' 는 드라이브 문자·NTFS 대체 스트림, 끝의 '.'·공백은 Windows 가 조용히 떼어 내 다른 이름이 된다.
+fn safe_local_segment(name: &str) -> AppResult<&str> {
+    let bad = name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['\\', '/', ':'])
+        || name.chars().any(|c| c.is_control())
+        || name.ends_with(['.', ' ']);
+    if bad {
+        return Err(AppError::user(format!("안전하지 않은 원격 파일 이름이라 받을 수 없습니다: {name:?}")));
+    }
+    Ok(name)
 }
 
 async fn download_one(s: &mut Session, remote: &str, target: &Path, counter: Arc<AtomicU64>) -> AppResult<()> {
     let part = part_path(target);
+    let f = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&part).await.map_err(|e| AppError::user(format!("{}: {e}", part.display())))?;
     let mut guard = PartGuard(Some(part.clone()));
-    let f = tokio::fs::File::create(&part).await.map_err(|e| AppError::user(format!("{}: {e}", part.display())))?;
     s.download(remote, f, counter).await?;
     // Windows 의 rename 은 기존 대상이 있으면 실패하므로 먼저 지운다
     if tokio::fs::try_exists(target).await.unwrap_or(false) {
@@ -338,10 +354,11 @@ async fn download(s: &mut Session, paths: &[String], target: &Path, env: Env) ->
             ctx.file_done();
             return Ok(ctx.done());
         }
-        let name = e.name.clone();
+        let name = safe_local_segment(&e.name)?.to_string();
         plan.push(RemoteItem { remote: p.clone(), rel: name.clone(), dir: e.dir, size: e.size });
         if e.dir {
             for (rel, c) in ops::walk(s, p).await? {
+                rel.split('/').try_for_each(|seg| safe_local_segment(seg).map(|_| ()))?;
                 plan.push(RemoteItem { remote: path::join(p, &rel), rel: format!("{name}/{rel}"), dir: c.dir, size: c.size });
             }
         }
@@ -356,14 +373,21 @@ async fn download(s: &mut Session, paths: &[String], target: &Path, env: Env) ->
         let local_parent = if parent_rel.is_empty() { target.to_path_buf() } else { target.join(parent_rel) };
         if item.dir {
             let d = local_parent.join(name);
+            if !d.starts_with(target) {
+                return Err(AppError::user(format!("선택한 폴더 밖에는 저장할 수 없습니다: {}", item.rel)));
+            }
             tokio::fs::create_dir_all(&d).await.map_err(|e| AppError::user(format!("{}: {e}", d.display())))?;
             continue;
         }
         let shown = local_parent.join(name);
         let chosen = resolve_conflict(&mut ctx, |n| local_parent.join(n).exists(), name, &shown.to_string_lossy(), false).await?;
         let Some(chosen) = chosen else { continue };
+        let local = local_parent.join(chosen);
+        if !local.starts_with(target) {
+            return Err(AppError::user(format!("선택한 폴더 밖에는 저장할 수 없습니다: {}", item.rel)));
+        }
         ctx.begin(&item.rel);
-        download_one(s, &item.remote, &local_parent.join(chosen), ctx.counter()).await?;
+        download_one(s, &item.remote, &local, ctx.counter()).await?;
         ctx.file_done();
     }
     Ok(ctx.done())
@@ -488,7 +512,9 @@ mod tests {
     fn part_guard_removes_file_on_drop() {
         let dir = tempfile::tempdir().unwrap();
         let part = part_path(&dir.path().join("a.bin"));
-        assert!(part.to_string_lossy().ends_with("a.bin.part"));
+        let fname = part.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(fname.starts_with(".a.bin.") && fname.ends_with(".part"));
+        assert_ne!(part, part_path(&dir.path().join("a.bin")));
         std::fs::write(&part, b"x").unwrap();
         drop(PartGuard(Some(part.clone())));
         assert!(!part.exists());
@@ -498,5 +524,25 @@ mod tests {
         g.disarm();
         drop(g);
         assert!(part.exists());
+    }
+
+    #[test]
+    fn local_segments() {
+        for ok in ["ok.txt", "한글.txt", ".env", "a b.txt"] {
+            assert_eq!(safe_local_segment(ok).unwrap(), ok);
+        }
+        for bad in ["", ".", "..", "..\\..\\x", "a\\b", "a/b", "C:x", "file.txt:stream", "a\0b", "a\nb", "name.", "name "] {
+            assert!(safe_local_segment(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn part_create_new_keeps_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let part = part_path(&dir.path().join("a.bin"));
+        std::fs::write(&part, b"mine").unwrap();
+        let r = tokio::fs::OpenOptions::new().write(true).create_new(true).open(&part).await;
+        assert!(r.is_err());
+        assert_eq!(std::fs::read(&part).unwrap(), b"mine");
     }
 }

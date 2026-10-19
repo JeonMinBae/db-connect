@@ -361,6 +361,46 @@ async fn s3_buckets_and_empty_folder() {
     assert_eq!(ops::delete_tree(&mut s, &base).await.unwrap(), 1006);
 }
 
+/// 버킷 미지정 접속에서 버킷 사이 복사·이동 (it-bucket2 는 s3-init 이 만든다)
+#[tokio::test]
+#[ignore]
+async fn s3_cross_bucket() {
+    let cfg = s3_cfg("");
+    let opener = || -> Option<transfer::Opener> {
+        let cfg = cfg.clone();
+        Some(Box::new(move || Box::pin(async move { Session::open(&cfg, Some("minioadmin"), &tmp()).await })))
+    };
+    let mut s = Session::open(&cfg, Some("minioadmin"), &tmp()).await.unwrap();
+    let id = uuid::Uuid::new_v4();
+    let (a, b) = (format!("/it-bucket/it-{id}"), format!("/it-bucket2/it-{id}"));
+    let big: Vec<u8> = (0..=255u8).cycle().take(300_000).collect();
+    s.mkdir(&a).await.unwrap();
+    s.mkdir(&b).await.unwrap();
+    s.mkdir(&format!("{a}/dir/빈")).await.unwrap();
+    s.write_all(&format!("{a}/x.txt"), &big).await.unwrap();
+    s.write_all(&format!("{a}/dir/sub y.txt"), "한글".as_bytes()).await.unwrap();
+
+    // 복사: 파일 + 폴더 (원본 유지)
+    let job = Job::Copy { paths: vec![format!("{a}/x.txt"), format!("{a}/dir")], dest_dir: b.clone() };
+    transfer::run(Session::open(&cfg, Some("minioadmin"), &tmp()).await.unwrap(), job, vec![], test_env(None), opener()).await.unwrap();
+    assert_eq!(s.read_all(&format!("{b}/x.txt"), 1 << 20).await.unwrap(), big);
+    assert_eq!(s.read_all(&format!("{b}/dir/sub y.txt"), 100).await.unwrap(), "한글".as_bytes());
+    assert!(s.stat(&format!("{b}/dir/빈")).await.unwrap().is_some_and(|(e, _)| e.dir));
+    assert!(s.stat(&format!("{a}/x.txt")).await.unwrap().is_some());
+
+    // 이동: 파일 + 폴더 (원본 삭제)
+    s.rename(&format!("{a}/x.txt"), &format!("{b}/moved.txt")).await.unwrap();
+    s.rename(&format!("{a}/dir"), &format!("{b}/moved-dir")).await.unwrap();
+    assert!(s.stat(&format!("{a}/x.txt")).await.unwrap().is_none());
+    assert!(s.stat(&format!("{a}/dir")).await.unwrap().is_none());
+    assert_eq!(s.read_all(&format!("{b}/moved.txt"), 1 << 20).await.unwrap(), big);
+    assert_eq!(s.read_all(&format!("{b}/moved-dir/sub y.txt"), 100).await.unwrap(), "한글".as_bytes());
+    assert!(s.stat(&format!("{b}/moved-dir/빈")).await.unwrap().is_some());
+
+    ops::delete_tree(&mut s, &a).await.unwrap();
+    ops::delete_tree(&mut s, &b).await.unwrap();
+}
+
 #[tokio::test]
 #[ignore]
 async fn s3_presign_and_bad_key() {

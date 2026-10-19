@@ -232,10 +232,35 @@ impl S3Session {
         Ok(())
     }
 
-    /// 같은 버킷 안에서만 복사한다. 원본 키는 헤더에 들어가므로 직접 인코딩해야 한다 (한글·공백).
+    /// 같은 버킷 안의 서버 복사. 원본 키는 헤더에 들어가므로 직접 인코딩해야 한다 (한글·공백).
     async fn copy(bucket: &Bucket, from: &str, to: &str) -> AppResult<()> {
         let enc = s3::signing::uri_encode(from, false);
         bucket.copy_object_internal(enc, rp(to)).await.map_err(s3_err)?;
+        Ok(())
+    }
+
+    /// rust-s3 의 서버 복사는 원본 버킷이 항상 자기 자신이라 버킷 사이에는 내려받으며 바로 올린다.
+    async fn copy_between(src: &Bucket, from: &str, dst: &Bucket, to: &str) -> AppResult<()> {
+        if src.name() == dst.name() {
+            return Self::copy(src, from, to).await;
+        }
+        // 빈 객체(폴더 마커 포함)는 길이를 모르는 스트림 업로드가 불안정해 직접 올린다
+        let (h, _) = src.head_object(rp(from)).await.map_err(s3_err)?;
+        if h.content_length.unwrap_or(0) <= 0 {
+            dst.put_object(rp(to), b"").await.map_err(s3_err)?;
+            return Ok(());
+        }
+        let (mut w, mut r) = tokio::io::duplex(256 * 1024);
+        let down = async {
+            src.get_object_to_writer(rp(from), &mut w).await.map_err(s3_err)?;
+            w.shutdown().await.map_err(|e| AppError::Remote(e.to_string()))?; // EOF 를 알려야 업로드가 끝난다
+            AppResult::Ok(())
+        };
+        let up = async {
+            dst.put_object_stream(&mut r, rp(to)).await.map_err(s3_err)?;
+            AppResult::Ok(())
+        };
+        tokio::try_join!(down, up)?;
         Ok(())
     }
 
@@ -243,22 +268,16 @@ impl S3Session {
         Err(AppError::user("S3 는 권한 변경을 지원하지 않습니다"))
     }
 
-    /// 같은 버킷 안의 객체 하나를 서버에서 복사한다 (폴더는 호출자가 객체 단위로 푼다)
+    /// 객체 하나를 복사한다 (폴더는 호출자가 객체 단위로 푼다). 버킷이 다르면 스트리밍.
     pub async fn server_copy(&mut self, from: &str, to: &str) -> AppResult<()> {
         let (bucket, src) = self.target(from)?;
         let (dst_bucket, dst) = self.target(to)?;
-        if bucket.name() != dst_bucket.name() {
-            return Err(AppError::user("버킷 사이에서는 복사할 수 없습니다"));
-        }
-        Self::copy(&bucket, &src, &dst).await
+        Self::copy_between(&bucket, &src, &dst_bucket, &dst).await
     }
 
     pub async fn rename(&mut self, from: &str, to: &str) -> AppResult<()> {
         let (bucket, src) = self.target(from)?;
         let (dst_bucket, dst) = self.target(to)?;
-        if bucket.name() != dst_bucket.name() {
-            return Err(AppError::user("버킷 사이에서는 이동할 수 없습니다"));
-        }
         if self.stat(from).await?.is_some_and(|(e, _)| e.dir) {
             let (sp, dp) = (format!("{src}/"), format!("{dst}/"));
             let keys: Vec<String> = bucket
@@ -269,14 +288,14 @@ impl S3Session {
                 .flat_map(|p| p.contents.into_iter().map(|o| o.key))
                 .collect();
             for k in &keys {
-                Self::copy(&bucket, k, &format!("{dp}{}", &k[sp.len()..])).await?;
+                Self::copy_between(&bucket, k, &dst_bucket, &format!("{dp}{}", &k[sp.len()..])).await?;
             }
             // 복사가 모두 끝난 뒤에 지워 중간에 실패해도 원본이 남게 한다
             for k in &keys {
                 bucket.delete_object(rp(k)).await.map_err(s3_err)?;
             }
         } else {
-            Self::copy(&bucket, &src, &dst).await?;
+            Self::copy_between(&bucket, &src, &dst_bucket, &dst).await?;
             bucket.delete_object(rp(&src)).await.map_err(s3_err)?;
         }
         Ok(())

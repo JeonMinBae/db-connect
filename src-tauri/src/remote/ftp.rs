@@ -1,5 +1,8 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use suppaftp::async_native_tls::TlsConnector;
@@ -7,7 +10,8 @@ use suppaftp::list::{File, ListParser};
 use suppaftp::tokio::{AsyncNativeTlsConnector, AsyncNativeTlsFtpStream};
 use suppaftp::types::FileType;
 use suppaftp::{Encoding, FtpError};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::time::{Instant, Sleep};
 
 use super::io::Counting;
 use super::{path, Entry, Stamp};
@@ -15,6 +19,73 @@ use crate::error::{AppError, AppResult};
 use crate::store::config::{ConnectionConfig, FsEncoding, FtpTls};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// 제어 채널 명령 하나의 응답 대기 한도. 넘으면 연결이 끊긴 것으로 보고 세션을 버린다.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+/// 데이터 채널은 전체 시간이 아니라 진행이 없는 시간만 제한한다
+const DATA_IDLE: Duration = Duration::from_secs(60);
+
+/// 제어 채널 명령에 응답 제한을 건다. ftp_err 가 TimedOut 을 Disconnected 로 바꾼다.
+async fn ctl<T>(f: impl Future<Output = Result<T, FtpError>>) -> Result<T, FtpError> {
+    tokio::time::timeout(CONTROL_TIMEOUT, f)
+        .await
+        .unwrap_or_else(|_| Err(FtpError::ConnectionError(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))))
+}
+
+/// 읽기·쓰기가 DATA_IDLE 동안 진행되지 않으면 TimedOut 오류를 내는 래퍼
+struct Idle<T> {
+    inner: T,
+    timer: Pin<Box<Sleep>>,
+}
+
+impl<T> Idle<T> {
+    fn new(inner: T) -> Self {
+        Self { inner, timer: Box::pin(tokio::time::sleep(DATA_IDLE)) }
+    }
+
+    fn gate<R>(&mut self, cx: &mut Context<'_>, r: Poll<std::io::Result<R>>) -> Poll<std::io::Result<R>> {
+        match r {
+            Poll::Ready(v) => {
+                self.timer.as_mut().reset(Instant::now() + DATA_IDLE);
+                Poll::Ready(v)
+            }
+            Poll::Pending if self.timer.as_mut().poll(cx).is_ready() => Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Idle<T> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        let r = Pin::new(&mut self.inner).poll_read(cx, buf);
+        self.gate(cx, r)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Idle<T> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        let r = Pin::new(&mut self.inner).poll_write(cx, buf);
+        self.gate(cx, r)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let r = Pin::new(&mut self.inner).poll_flush(cx);
+        self.gate(cx, r)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let r = Pin::new(&mut self.inner).poll_shutdown(cx);
+        self.gate(cx, r)
+    }
+}
+
+/// 데이터 복사 중 오류. 진행 없음 타임아웃이면 끊긴 연결로 취급한다.
+fn data_err(e: std::io::Error) -> AppError {
+    if e.kind() == std::io::ErrorKind::TimedOut {
+        AppError::Disconnected("응답 시간이 초과되었습니다".into())
+    } else {
+        AppError::Remote(e.to_string())
+    }
+}
 
 /// 서버 파일명이 EUC-KR 일 때 제어 연결 명령·목록 줄을 변환한다.
 #[derive(Debug)]
@@ -54,6 +125,7 @@ fn reply_text(r: &suppaftp::types::Response) -> String {
 
 fn ftp_err(e: FtpError) -> AppError {
     match &e {
+        FtpError::ConnectionError(io) if io.kind() == std::io::ErrorKind::TimedOut => AppError::Disconnected("응답 시간이 초과되었습니다".into()),
         FtpError::ConnectionError(_) => AppError::Disconnected(e.to_string()),
         // 421: 서버가 제어 연결을 닫는 중
         FtpError::UnexpectedResponse(r) if r.status as u32 == 421 => AppError::Disconnected(reply_text(r)),
@@ -117,7 +189,7 @@ impl FtpSession {
     }
 
     pub async fn noop(&mut self) -> AppResult<()> {
-        self.ftp.noop().await.map_err(ftp_err)
+        ctl(self.ftp.noop()).await.map_err(ftp_err)
     }
 
     /// (항목, 링크 여부). 링크는 가리키는 대상이 폴더면 dir 로 본다.
@@ -126,7 +198,7 @@ impl FtpSession {
         let mut files: Vec<(File, Option<u32>)> = Vec::new();
         let mut done = false;
         if !self.no_mlsd {
-            match self.ftp.mlsd(Some(&dir)).await {
+            match ctl(self.ftp.mlsd(Some(&dir))).await {
                 Ok(lines) => {
                     for l in lines {
                         let lower = l.to_ascii_lowercase();
@@ -144,7 +216,7 @@ impl FtpSession {
             }
         }
         if !done {
-            for l in self.ftp.list(Some(&dir)).await? {
+            for l in ctl(self.ftp.list(Some(&dir))).await? {
                 if let Ok(f) = File::try_from(l.as_str()) {
                     files.push((f, None));
                 }
@@ -160,9 +232,9 @@ impl FtpSession {
             let mut is_dir = f.is_directory();
             if link {
                 // LIST 는 링크 대상 종류를 알려 주지 않으므로 CWD 로 확인한다
-                if self.ftp.cwd(path::join(&dir, &name)).await.is_ok() {
+                if ctl(self.ftp.cwd(path::join(&dir, &name))).await.is_ok() {
                     is_dir = true;
-                    let _ = self.ftp.cwd("/").await;
+                    let _ = ctl(self.ftp.cwd("/")).await;
                 }
             }
             let mtime = (f.modified() != SystemTime::UNIX_EPOCH)
@@ -199,11 +271,11 @@ impl FtpSession {
     }
 
     pub async fn mkdir(&mut self, p: &str) -> AppResult<()> {
-        self.ftp.mkdir(path::normalize(p)).await.map_err(ftp_err)
+        ctl(self.ftp.mkdir(path::normalize(p))).await.map_err(ftp_err)
     }
 
     pub async fn rename(&mut self, from: &str, to: &str) -> AppResult<()> {
-        self.ftp.rename(path::normalize(from), path::normalize(to)).await.map_err(ftp_err)
+        ctl(self.ftp.rename(path::normalize(from), path::normalize(to))).await.map_err(ftp_err)
     }
 
     pub async fn chmod(&mut self, p: &str, mode: u32) -> AppResult<()> {
@@ -212,16 +284,16 @@ impl FtpSession {
         if p.contains(['\r', '\n']) {
             return Err(AppError::user("경로에 줄바꿈을 쓸 수 없습니다"));
         }
-        self.ftp.site(format!("CHMOD {:o} {p}", mode & 0o7777)).await.map_err(ftp_err)?;
+        ctl(self.ftp.site(format!("CHMOD {:o} {p}", mode & 0o7777))).await.map_err(ftp_err)?;
         Ok(())
     }
 
     pub async fn remove_file(&mut self, p: &str) -> AppResult<()> {
-        self.ftp.rm(path::normalize(p)).await.map_err(ftp_err)
+        ctl(self.ftp.rm(path::normalize(p))).await.map_err(ftp_err)
     }
 
     pub async fn remove_dir(&mut self, p: &str) -> AppResult<()> {
-        self.ftp.rmdir(path::normalize(p)).await.map_err(ftp_err)
+        ctl(self.ftp.rmdir(path::normalize(p))).await.map_err(ftp_err)
     }
 
     pub async fn is_link(&mut self, p: &str) -> AppResult<bool> {
@@ -229,36 +301,36 @@ impl FtpSession {
     }
 
     pub async fn upload(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, _len: u64, counter: Arc<AtomicU64>) -> AppResult<()> {
-        let mut data = self.ftp.put_with_stream(path::normalize(p)).await.map_err(ftp_err)?;
+        let mut data = ctl(self.ftp.put_with_stream(path::normalize(p))).await.map_err(ftp_err)?;
         let mut r = Counting::new(reader, counter);
         // 복사가 실패하면 data 가 drop 되며 전송이 중단 처리된다
-        tokio::io::copy(&mut r, &mut data).await.map_err(|e| AppError::Remote(e.to_string()))?;
-        data.finish().await.map_err(ftp_err)
+        tokio::io::copy(&mut r, &mut Idle::new(&mut data)).await.map_err(data_err)?;
+        ctl(data.finish()).await.map_err(ftp_err)
     }
 
     pub async fn download(&mut self, p: &str, writer: impl AsyncWrite + Unpin + Send, counter: Arc<AtomicU64>) -> AppResult<()> {
-        let mut data = self.ftp.retr_as_stream(path::normalize(p)).await.map_err(ftp_err)?;
+        let mut data = ctl(self.ftp.retr_as_stream(path::normalize(p))).await.map_err(ftp_err)?;
         let mut w = Counting::new(writer, counter);
-        tokio::io::copy(&mut data, &mut w).await.map_err(|e| AppError::Remote(e.to_string()))?;
+        tokio::io::copy(&mut Idle::new(&mut data), &mut w).await.map_err(data_err)?;
         w.flush().await.map_err(|e| AppError::Remote(e.to_string()))?;
-        data.finish().await.map_err(ftp_err)
+        ctl(data.finish()).await.map_err(ftp_err)
     }
 
     pub async fn read_all(&mut self, p: &str, limit: u64) -> AppResult<Vec<u8>> {
         let p = path::normalize(p);
         // SIZE 미지원 서버는 읽으면서 limit 에서 끊는다
-        if let Ok(n) = self.ftp.size(&p).await {
+        if let Ok(n) = ctl(self.ftp.size(&p)).await {
             if n as u64 > limit {
                 return Err(AppError::user("파일이 너무 큽니다"));
             }
         }
-        let mut data = self.ftp.retr_as_stream(&p).await.map_err(ftp_err)?;
+        let mut data = ctl(self.ftp.retr_as_stream(&p)).await.map_err(ftp_err)?;
         let mut buf = Vec::new();
-        (&mut data).take(limit + 1).read_to_end(&mut buf).await.map_err(|e| AppError::Remote(e.to_string()))?;
+        Idle::new(&mut data).take(limit + 1).read_to_end(&mut buf).await.map_err(data_err)?;
         if buf.len() as u64 > limit {
             return Err(AppError::user("파일이 너무 큽니다"));
         }
-        data.finish().await.map_err(ftp_err)?;
+        ctl(data.finish()).await.map_err(ftp_err)?;
         Ok(buf)
     }
 

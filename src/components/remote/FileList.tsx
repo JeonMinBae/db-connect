@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
-import { parseMode, type Clip, mtimeText, permText, sizeText, sortEntries, visibleEntries, type SortKey } from "../../remote/browser";
+import { dragNames, parseMode, type Clip, mtimeText, permText, sizeText, sortEntries, visibleEntries, type SortKey } from "../../remote/browser";
 import { insideElement, registerDropHandler } from "../../remote/drops";
 import { join, parent } from "../../remote/path";
 import { useTabs } from "../../store/tabs";
@@ -37,6 +37,7 @@ const COLS: { key: SortKey; label: string }[] = [
   { key: "name", label: "이름" },
   { key: "size", label: "크기" },
   { key: "mtime", label: "수정일" },
+  { key: "perm", label: "권한" },
 ];
 
 export function FileList(props: Props) {
@@ -181,14 +182,21 @@ export function FileList(props: Props) {
   };
 
   const startDrag = (e: React.PointerEvent, r: RemoteEntry) => {
-    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || cfg.read_only) return;
-    const names = sel.has(r.name) ? [...sel] : [r.name];
-    if (!sel.has(r.name)) {
-      setSel(new Set([r.name]));
-      anchor.current = r.name;
-    }
-    const srcPaths = names.map((n) => join(path, n));
-    const label = names.length === 1 ? names[0] : `${names.length}개 항목`;
+    if (e.button !== 0 || e.shiftKey || cfg.read_only) return;
+    // Ctrl 은 클릭(선택 토글)일 수도 끌기(복사)일 수도 있어, 4px 를 넘어 끌기가 확정될 때 선택을 바꾼다
+    const additive = e.ctrlKey || e.metaKey;
+    let srcPaths: string[] = [];
+    let label = "";
+    const begin = () => {
+      const names = dragNames([...sel], r.name, additive);
+      if (!sel.has(r.name)) {
+        setSel(new Set(names));
+        anchor.current = r.name;
+      }
+      srcPaths = names.map((n) => join(path, n));
+      label = names.length === 1 ? names[0] : `${names.length}개 항목`;
+    };
+    if (!additive) begin();
     const start = { x: e.clientX, y: e.clientY };
     let active = false;
     const stop = () => {
@@ -200,6 +208,7 @@ export function FileList(props: Props) {
     };
     const onMove = (ev: PointerEvent) => {
       if (!active && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 4) return;
+      if (!active && additive) begin();
       active = true;
       setDrag({ x: ev.clientX, y: ev.clientY, label, target: dropTargetAt(ev.clientX, ev.clientY, srcPaths), copy: ev.ctrlKey || ev.metaKey });
     };
@@ -313,7 +322,7 @@ export function FileList(props: Props) {
               {header(COLS[0])}
               {header(COLS[1])}
               {header(COLS[2])}
-              {showPerm && <th>권한</th>}
+              {showPerm && header(COLS[3])}
             </tr>
           </thead>
           <tbody>

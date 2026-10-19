@@ -9,9 +9,20 @@ pub async fn delete_tree(s: &mut Session, p: &str) -> AppResult<u64> {
         s.remove_file(p).await?;
         return Ok(1);
     }
+    delete_dir(s, p).await
+}
+
+/// 목록에서 이미 알게 된 Entry 로 분기해 항목마다 stat(FTP 는 부모 목록 재조회)을 하지 않는다
+async fn delete_dir(s: &mut Session, p: &str) -> AppResult<u64> {
     let mut n = 0;
     for child in s.list(p).await? {
-        n += Box::pin(delete_tree(s, &path::join(p, &child.name))).await?;
+        let cp = path::join(p, &child.name);
+        if child.dir && !s.is_link(&cp).await? {
+            n += Box::pin(delete_dir(s, &cp)).await?;
+        } else {
+            s.remove_file(&cp).await?;
+            n += 1;
+        }
     }
     s.remove_dir(p).await?;
     Ok(n)

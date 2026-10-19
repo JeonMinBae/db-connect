@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { History, isInside, mtimeText, parseMode, permText, sizeText, sortEntries, visibleEntries } from "./browser";
+import { dragNames, History, isInside, mtimeText, parseMode, permText, sizeText, sortEntries, visibleEntries } from "./browser";
 
 const e = (name: string, dir = false, size = 0, mtime: number | null = null) => ({ name, dir, size, mtime, perm: null });
 
@@ -11,6 +11,23 @@ describe("sortEntries", () => {
   it("크기 내림차순이어도 폴더는 위, 같은 크기는 이름순", () => {
     const out = sortEntries([e("x", false, 5), e("d", true), e("b", false, 9), e("a", false, 5)], "size", false);
     expect(out.map((x) => x.name)).toEqual(["d", "b", "a", "x"]);
+  });
+});
+
+describe("sortEntries perm", () => {
+  const p = (name: string, perm: number | null, dir = false) => ({ ...e(name, dir), perm });
+  it("perm 오름차순은 null 이 먼저, 폴더는 위, 동률은 이름순", () => {
+    const list = [p("b", 0o644), p("a", 0o755), p("n", null), p("d", 0o600, true), p("c", 0o644)];
+    expect(sortEntries(list, "perm", true).map((x) => x.name)).toEqual(["d", "n", "b", "c", "a"]);
+    expect(sortEntries(list, "perm", false).map((x) => x.name)).toEqual(["d", "a", "b", "c", "n"]);
+  });
+});
+
+describe("dragNames", () => {
+  it("선택된 행을 끌면 선택 전체, 아니면 Ctrl 은 더하고 일반은 그 행만", () => {
+    expect(dragNames(["a", "b"], "a", false)).toEqual(["a", "b"]);
+    expect(dragNames(["a", "b"], "c", true)).toEqual(["a", "b", "c"]);
+    expect(dragNames(["a", "b"], "c", false)).toEqual(["c"]);
   });
 });
 
