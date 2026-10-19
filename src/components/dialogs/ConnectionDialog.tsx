@@ -7,7 +7,7 @@ import { toast } from "../../store/ui";
 import { DriverSelect } from "../dbLogos";
 import { Modal } from "../ui";
 
-const DEFAULT_PORT: Record<ConnDriver, number> = { postgres: 5432, mysql: 3306, sqlite: 0, redis: 6379, mongodb: 0 };
+const DEFAULT_PORT: Record<ConnDriver, number> = { postgres: 5432, mysql: 3306, sqlite: 0, redis: 6379, mongodb: 0, ftp: 21, sftp: 22, s3: 0 };
 
 export function blankConfig(): ConnectionConfig {
   return {
@@ -26,6 +26,15 @@ export function blankConfig(): ConnectionConfig {
     redis_db: 0,
     key_separator: ":",
     mongo_uri: "",
+    ftp_tls: "none",
+    tls_insecure: false,
+    fs_encoding: "utf8",
+    ssh_key_path: null,
+    s3_endpoint: "",
+    s3_region: "",
+    s3_bucket: "",
+    s3_prefix: "",
+    s3_path_style: false,
   };
 }
 

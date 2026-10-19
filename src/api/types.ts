@@ -1,7 +1,11 @@
 /** SQL 드라이버 (SQL 파서·에디터·편집 코드가 쓰는 방언) */
 export type Driver = "postgres" | "mysql" | "sqlite";
 /** 접속 드라이버 */
-export type ConnDriver = Driver | "redis" | "mongodb";
+export type RemoteDriver = "ftp" | "sftp" | "s3";
+export type ConnDriver = Driver | "redis" | "mongodb" | RemoteDriver;
+export const isRemote = (d: ConnDriver): d is RemoteDriver => d === "ftp" || d === "sftp" || d === "s3";
+export type FtpTls = "none" | "explicit" | "implicit";
+export type FsEncoding = "utf8" | "euc-kr";
 export const isSql = (d: ConnDriver): d is Driver => d === "postgres" || d === "mysql" || d === "sqlite";
 export type SslMode = "disable" | "prefer" | "require" | "verify-ca" | "verify-full";
 
@@ -24,6 +28,21 @@ export interface ConnectionConfig {
   key_separator: string;
   /** MongoDB: 연결 문자열 (비밀번호 제외) */
   mongo_uri: string;
+  /** FTP: 암호화 방식 */
+  ftp_tls: FtpTls;
+  /** FTPS: 검증 실패 인증서 허용 */
+  tls_insecure: boolean;
+  /** FTP: 서버 파일명 인코딩 */
+  fs_encoding: FsEncoding;
+  /** SFTP: 개인키 파일 (null 이면 비밀번호 인증) */
+  ssh_key_path: string | null;
+  s3_endpoint: string;
+  s3_region: string;
+  /** S3: 비우면 루트에 버킷 목록 */
+  s3_bucket: string;
+  /** S3: 시작 접두어 (앞뒤 '/' 없이) */
+  s3_prefix: string;
+  s3_path_style: boolean;
 }
 
 export type Cell =

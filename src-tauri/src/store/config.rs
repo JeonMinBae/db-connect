@@ -13,6 +13,9 @@ pub enum Driver {
     Sqlite,
     Redis,
     Mongodb,
+    Ftp,
+    Sftp,
+    S3,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -24,6 +27,23 @@ pub enum SslMode {
     Require,
     VerifyCa,
     VerifyFull,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FtpTls {
+    #[default]
+    None,
+    Explicit,
+    Implicit,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum FsEncoding {
+    #[default]
+    Utf8,
+    EucKr,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -47,6 +67,22 @@ pub struct ConnectionConfig {
     pub key_separator: String,
     /// MongoDB: 연결 문자열 (비밀번호는 키체인에 따로 둔다)
     pub mongo_uri: String,
+    /// FTP: 암호화 방식
+    pub ftp_tls: FtpTls,
+    /// FTPS: 자체서명 등 검증 실패 인증서 허용
+    pub tls_insecure: bool,
+    /// FTP: 서버 파일명 인코딩
+    pub fs_encoding: FsEncoding,
+    /// SFTP: 개인키 파일 (None 이면 비밀번호 인증, 키체인 값은 passphrase 로 쓴다)
+    pub ssh_key_path: Option<String>,
+    /// S3: endpoint URL (AWS 는 비워 두면 region 으로 만든다)
+    pub s3_endpoint: String,
+    pub s3_region: String,
+    /// S3: 비우면 루트에 버킷 목록
+    pub s3_bucket: String,
+    /// S3: 시작 접두어 (앞뒤 '/' 없이 저장)
+    pub s3_prefix: String,
+    pub s3_path_style: bool,
 }
 
 impl Default for ConnectionConfig {
@@ -67,6 +103,15 @@ impl Default for ConnectionConfig {
             redis_db: 0,
             key_separator: ":".into(),
             mongo_uri: String::new(),
+            ftp_tls: FtpTls::default(),
+            tls_insecure: false,
+            fs_encoding: FsEncoding::default(),
+            ssh_key_path: None,
+            s3_endpoint: String::new(),
+            s3_region: String::new(),
+            s3_bucket: String::new(),
+            s3_prefix: String::new(),
+            s3_path_style: false,
         }
     }
 }
@@ -122,6 +167,24 @@ mod tests {
 
     fn cfg(id: &str, name: &str) -> ConnectionConfig {
         ConnectionConfig { id: id.into(), name: name.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn old_json_reads_with_defaults() {
+        let json = r#"[{"id":"a","name":"pg","driver":"postgres","host":"h","port":5432}]"#;
+        let list: Vec<ConnectionConfig> = serde_json::from_str(json).unwrap();
+        assert_eq!(list[0].ftp_tls, FtpTls::None);
+        assert_eq!(list[0].fs_encoding, FsEncoding::Utf8);
+        assert!(list[0].ssh_key_path.is_none());
+    }
+
+    #[test]
+    fn remote_drivers_roundtrip() {
+        for (d, s) in [(Driver::Ftp, "\"ftp\""), (Driver::Sftp, "\"sftp\""), (Driver::S3, "\"s3\"")] {
+            assert_eq!(serde_json::to_string(&d).unwrap(), s);
+            assert_eq!(serde_json::from_str::<Driver>(s).unwrap(), d);
+        }
+        assert_eq!(serde_json::to_string(&FsEncoding::EucKr).unwrap(), "\"euc-kr\"");
     }
 
     #[test]

@@ -58,6 +58,9 @@ pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppRes
 fn same_target(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
     let strip = |u: &str| mongo::split_password(u.trim()).0;
     a.driver == b.driver && a.host == b.host && a.port == b.port && a.user == b.user && strip(&a.mongo_uri) == strip(&b.mongo_uri)
+        && a.ssh_key_path == b.ssh_key_path
+        && a.s3_endpoint == b.s3_endpoint
+        && a.s3_bucket == b.s3_bucket
 }
 
 /// password가 None이면 저장된 비밀번호로 테스트한다(편집 다이얼로그에서 비밀번호 칸을 비운 경우).
@@ -79,6 +82,7 @@ pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfi
     match config.driver {
         Driver::Redis => redis::test(&config, pw).await,
         Driver::Mongodb => mongo::test(&config, pw).await,
+        Driver::Ftp | Driver::Sftp | Driver::S3 => Err(AppError::user("파일 접속은 아직 지원하지 않습니다")),
         _ => pool::test(&config, pw).await,
     }
 }
@@ -117,6 +121,7 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> AppResult<Connec
             state.mongo.write().await.insert(id, Arc::new(c));
             Ok(info)
         }
+        Driver::Ftp | Driver::Sftp | Driver::S3 => Err(AppError::user("파일 접속은 아직 지원하지 않습니다")),
         _ => {
             let opts = build_opts(&cfg, pw.as_deref())?;
             let pool = opts.open_pool().await?;
