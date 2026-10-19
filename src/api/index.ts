@@ -40,6 +40,8 @@ export interface BlobReq {
 }
 
 /** 대화상자를 취소하면 null */
+/** 로컬 경로 토큰: 전체 경로는 백엔드에만 있고 웹뷰는 id 와 이름만 안다 */
+export type Pick = { pick_id: string; names: string[] };
 export type FileResult = { path: string; bytes: number } | null;
 
 export function errorMessage(e: unknown): string {
@@ -59,6 +61,11 @@ export const api = {
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
   remoteTrustHost: (host: string, port: number, fingerprint: string) => invoke<void>("remote_trust_host", { host, port, fingerprint }),
   pickKeyFile: () => invoke<string | null>("pick_key_file"),
+  /** 업로드할 로컬 파일(dirs=false) 또는 폴더. 취소하면 null */
+  pickUpload: (dirs: boolean) => invoke<Pick | null>("pick_upload", { dirs }),
+  /** fileName 이 있으면 저장 대화상자, null 이면 폴더 대화상자. 취소하면 null */
+  pickDownloadTarget: (fileName: string | null) => invoke<Pick | null>("pick_download_target", { fileName }),
+  pickRelease: (pickId: string) => invoke<void>("pick_release", { pickId }),
   remoteList: (connId: string, path: string) => invoke<RemoteEntry[]>("remote_list", { connId, path }),
   remoteMkdir: (connId: string, path: string) => invoke<void>("remote_mkdir", { connId, path }),
   remoteRename: (connId: string, from: string, to: string) => invoke<void>("remote_rename", { connId, from, to }),

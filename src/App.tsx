@@ -15,6 +15,7 @@ import { BrowserTab } from "./components/remote/BrowserTab";
 import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
 import { useTabs, type Tab } from "./store/tabs";
 import { useColorScheme, type Scheme } from "./theme";
+import { installDropListener } from "./remote/drops";
 
 const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤", remoteBrowser: "🗁", remoteFile: "📝" };
 
@@ -74,7 +75,9 @@ export default function App() {
       if (!el.closest("input, textarea, .cm-editor")) e.preventDefault();
     };
     window.addEventListener("contextmenu", noMenu);
+    const uninstallDrop = installDropListener();
     return () => {
+      uninstallDrop();
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("contextmenu", noMenu);
     };

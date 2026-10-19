@@ -2,6 +2,7 @@
 pub mod known_hosts;
 pub mod ops;
 pub mod path;
+pub mod picks;
 pub mod sftp;
 #[cfg(test)]
 #[path = "it.rs"]

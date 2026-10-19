@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, errorMessage } from "../../api";
+import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
 import { mtimeText, permText, sizeText, sortEntries, visibleEntries, type SortKey } from "../../remote/browser";
+import { insideElement, registerDropHandler } from "../../remote/drops";
 import { join, parent } from "../../remote/path";
 import { useTabs } from "../../store/tabs";
 import { confirmDialog, promptDialog, toast } from "../../store/ui";
@@ -18,6 +19,10 @@ interface Props {
   /** 쓰기 작업 뒤 호출: 목록 새로고침과 트리 캐시 무효화는 호출자가 한다 */
   onChanged: (affectedDirs: string[]) => void;
   onRefresh: () => void;
+  /** OS 에서 이 목록으로 끌어다 놓은 항목 (소유권이 넘어오므로 받은 쪽이 해제까지 책임진다) */
+  onDropPick?: (pick: Pick) => void;
+  /** 이 탭이 활성일 때만 드롭을 받는다 */
+  active: boolean;
 }
 
 const COLS: { key: SortKey; label: string }[] = [
@@ -41,6 +46,24 @@ export function FileList(props: Props) {
     setSel(new Set());
     anchor.current = null;
   }, [path]);
+
+  // 핸들러는 항상 최신 props 를 보도록 ref 로 들고, 등록은 마운트 동안 한 번만 한다
+  const drop = useRef({ props, cfg });
+  drop.current = { props, cfg };
+  useEffect(
+    () =>
+      registerDropHandler((pick, x, y) => {
+        const { props: p, cfg: c } = drop.current;
+        if (!p.active || !insideElement(host.current, x, y)) return false;
+        if (c.read_only) {
+          toast("읽기 전용 접속입니다", "error");
+          void api.pickRelease(pick.pick_id).catch(() => {});
+        } else if (p.onDropPick) p.onDropPick(pick);
+        else void api.pickRelease(pick.pick_id).catch(() => {});
+        return true;
+      }),
+    [],
+  );
 
   const selected = rows.filter((r) => sel.has(r.name));
 

@@ -1,7 +1,8 @@
 use tauri::{AppHandle, State};
 
-use crate::commands::edit::pick_path;
+use crate::commands::edit::{pick_files, pick_folder, pick_path};
 use crate::error::{AppError, AppResult};
+use crate::remote::picks::Pick;
 use crate::remote::{known_hosts, ops, path, Entry};
 use crate::state::AppState;
 
@@ -15,6 +16,28 @@ pub fn remote_trust_host(state: State<'_, AppState>, host: String, port: u16, fi
 #[tauri::command]
 pub async fn pick_key_file(app: AppHandle) -> AppResult<Option<String>> {
     Ok(pick_path(&app, None).await?.map(|p| p.to_string_lossy().into_owned()))
+}
+
+/// 업로드할 로컬 파일·폴더를 대화상자로 고른다. 취소하면 None.
+#[tauri::command]
+pub async fn pick_upload(app: AppHandle, state: State<'_, AppState>, dirs: bool) -> AppResult<Option<Pick>> {
+    let paths = pick_files(&app, dirs).await?;
+    Ok((!paths.is_empty()).then(|| state.picks.register(paths)))
+}
+
+/// 내려받을 위치를 고른다. 파일명이 있으면 저장 대화상자, 없으면 폴더 대화상자. 취소하면 None.
+#[tauri::command]
+pub async fn pick_download_target(app: AppHandle, state: State<'_, AppState>, file_name: Option<String>) -> AppResult<Option<Pick>> {
+    let p = match file_name {
+        Some(n) => pick_path(&app, Some(n)).await?,
+        None => pick_folder(&app).await?,
+    };
+    Ok(p.map(|p| state.picks.register(vec![p])))
+}
+
+#[tauri::command]
+pub fn pick_release(state: State<'_, AppState>, pick_id: String) {
+    state.picks.release(&pick_id);
 }
 
 /// 정규화한 경로를 돌려주되 루트는 거부한다 (쓰기 계열 공통)

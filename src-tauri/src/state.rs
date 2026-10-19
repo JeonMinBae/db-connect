@@ -9,6 +9,7 @@ use crate::db::mongo::MongoConn;
 use crate::db::pool::{AnyConn, ConnectOpts, DbConn, DbPool, Pooled};
 use crate::db::redis::RedisConn;
 use crate::error::{AppError, AppResult};
+use crate::remote::picks::PickRegistry;
 use crate::remote::RemoteConn;
 use crate::store::config::ConnectionConfig;
 
@@ -77,6 +78,8 @@ pub struct AppState {
     pub redis: RwLock<HashMap<String, Arc<RedisConn>>>,
     pub mongo: RwLock<HashMap<String, Arc<MongoConn>>>,
     pub remote: RwLock<HashMap<String, Arc<RemoteConn>>>,
+    /// 대화상자·드롭으로 고른 로컬 경로 (웹뷰에는 id 만 준다)
+    pub picks: PickRegistry,
     /// Redis·MongoDB 실행 중인 작업 (exec_id → 중지 핸들)
     pub aborts: Mutex<HashMap<String, tokio::task::AbortHandle>>,
 }
@@ -91,6 +94,7 @@ impl AppState {
             redis: RwLock::new(HashMap::new()),
             mongo: RwLock::new(HashMap::new()),
             remote: RwLock::new(HashMap::new()),
+            picks: PickRegistry::default(),
             aborts: Mutex::new(HashMap::new()),
         }
     }

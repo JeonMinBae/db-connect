@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { api, errorMessage } from "../../api";
+import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
 import { History } from "../../remote/browser";
 import { normalize } from "../../remote/path";
@@ -76,6 +76,12 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
     refresh();
   };
 
+  // 전송 큐가 생기기 전까지의 임시 처리 (Task 8 에서 업로드 등록으로 교체)
+  const dropPick = (pick: Pick) => {
+    toast(`${pick.names.length}개 항목 업로드는 전송 기능에서 처리됩니다`);
+    void api.pickRelease(pick.pick_id).catch(() => {});
+  };
+
   return (
     <>
       <div className="toolbar">
@@ -108,7 +114,7 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
           <FolderTree ref={tree} connId={cfg.id} current={path} showHidden={showHidden} onOpen={(p) => void go(p)} />
         </div>
         <Splitter dir="v" size={treeWidth} onResize={setTreeWidth} min={120} max={600} />
-        <FileList cfg={cfg} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
+        <FileList cfg={cfg} active={props.active} onDropPick={dropPick} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
       </div>
       {/* 전송 큐 자리 (Task 8) */}
       <div className="remote-footer" />
