@@ -95,8 +95,13 @@ export interface SnapshotTable {
 }
 
 export interface AppError {
-  kind: "db" | "io" | "keyring" | "json" | "redis" | "mongo" | "user" | "submit";
+  kind: "db" | "io" | "keyring" | "json" | "redis" | "mongo" | "user" | "submit" | "remote" | "hostkey";
   message: string;
+  /** hostkey: 확인할 서버와 지문 (changed 면 저장된 키와 다름) */
+  host?: string;
+  port?: number;
+  fingerprint?: string;
+  changed?: boolean;
   change_index?: number;
   affected?: number;
 }

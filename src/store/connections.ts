@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api, errorMessage } from "../api";
-import { isSql, type ConnectionConfig, type SnapshotTable } from "../api/types";
+import { isSql, type AppError, type ConnectionConfig, type SnapshotTable } from "../api/types";
 import { dirtyMessage, useTabs } from "./tabs";
 import { confirmDialog, toast } from "./ui";
 
@@ -76,7 +76,18 @@ export const useConnections = create<ConnState>((set, get) => ({
     if (st === "connecting") return false;
     set((s) => ({ status: { ...s.status, [id]: "connecting" } }));
     try {
-      const info = await api.connect(id);
+      let info;
+      try {
+        info = await api.connect(id);
+      } catch (e) {
+        if ((e as AppError)?.kind !== "hostkey") throw e;
+        // 거절하면 실패가 아니라 취소. 신뢰했으면 한 번만 다시 시도한다
+        if (!(await confirmHostKey(e))) {
+          set((s) => ({ status: { ...s.status, [id]: "idle" } }));
+          return false;
+        }
+        info = await api.connect(id);
+      }
       set((s) => ({
         status: { ...s.status, [id]: "connected" },
         defaultSchema: { ...s.defaultSchema, [id]: info.default_schema },
@@ -123,4 +134,16 @@ export async function confirmLeave(connId: string, action: string): Promise<bool
     okLabel: "계속",
     danger: true,
   });
+}
+
+/** SFTP 호스트 키 확인. 신뢰하면 true (호출한 쪽이 다시 시도한다) */
+export async function confirmHostKey(e: unknown): Promise<boolean> {
+  const err = e as AppError;
+  if (err?.kind !== "hostkey") return false;
+  const body = err.changed
+    ? `⚠ ${err.host} 의 호스트 키가 저장된 값과 다릅니다. 서버가 바뀌었거나 중간자 공격일 수 있습니다.\n\n새 지문: ${err.fingerprint}\n\n그래도 새 키를 신뢰할까요?`
+    : `${err.host} 에 처음 접속합니다. 호스트 키 지문을 확인하세요.\n\n${err.fingerprint}`;
+  if (!(await confirmDialog({ title: "호스트 키 확인", body, okLabel: "신뢰", danger: !!err.changed }))) return false;
+  await api.remoteTrustHost(err.host!, err.port!, err.fingerprint!);
+  return true;
 }

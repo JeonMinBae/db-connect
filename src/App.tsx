@@ -11,14 +11,14 @@ import { DropTableHost } from "./components/DropTableDialog";
 import { ExportProgressHost } from "./components/exportMenu";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
-import { isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
+import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
 import { useTabs, type Tab } from "./store/tabs";
 import { useColorScheme, type Scheme } from "./theme";
 
-const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤" };
+const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤", remoteBrowser: "🗁", remoteFile: "📝" };
 
 const tabDetail = (t: Tab) =>
-  t.kind === "table" || t.kind === "structure" ? ` · ${t.schema}.${t.table}` : t.kind === "redisKey" ? ` · db${t.db} · ${t.key}` : t.kind === "mongoColl" ? ` · ${t.db}.${t.coll}` : "";
+  t.kind === "table" || t.kind === "structure" ? ` · ${t.schema}.${t.table}` : t.kind === "redisKey" ? ` · db${t.db} · ${t.key}` : t.kind === "mongoColl" ? ` · ${t.db}.${t.coll}` : t.kind === "remoteFile" ? ` · ${t.path}` : "";
 
 /** 탭 종류와 접속 드라이버에 맞는 화면 */
 function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionConfig; scheme: Scheme; active: boolean }) {
@@ -36,6 +36,8 @@ function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionCon
     if (t.kind === "console") return <MongoConsoleTab tabId={t.id} cfg={cfg} scheme={scheme} active={active} />;
     if (t.kind === "mongoColl") return <MongoCollTab tabId={t.id} cfg={cfg} db={t.db} coll={t.coll} scheme={scheme} active={active} />;
   }
+  // 브라우저·편집 탭 컴포넌트는 이후 작업에서 연결한다
+  if (isRemote(cfg.driver)) return <div className="empty">준비 중</div>;
   return <div className="empty">이 접속에서는 열 수 없는 탭입니다</div>;
 }
 

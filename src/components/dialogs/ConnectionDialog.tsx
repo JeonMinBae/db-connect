@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage } from "../../api";
-import type { ConnDriver, ConnectionConfig, SslMode } from "../../api/types";
-import { useConnections } from "../../store/connections";
+import { isRemote, type ConnDriver, type ConnectionConfig, type SslMode } from "../../api/types";
+import { confirmHostKey, useConnections } from "../../store/connections";
 import { toast } from "../../store/ui";
 import { DriverSelect } from "../dbLogos";
 import { Modal } from "../ui";
@@ -56,9 +56,12 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
   const isLite = d === "sqlite";
   const isRedis = d === "redis";
   const isMongo = d === "mongodb";
+  const remote = isRemote(d);
+  const isSftp = d === "sftp";
+  const keyMode = isSftp && cfg.ssh_key_path !== null;
   const isLocal = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(cfg.host.trim().toLowerCase());
   // 인증서를 검증하지 않는 모드로 원격 서버에 접속하면 경고한다
-  const weakTls = !isLite && !isMongo && !isLocal && ["disable", "prefer", "require"].includes(cfg.ssl_mode);
+  const weakTls = !isLite && !isMongo && !remote && !isLocal && ["disable", "prefer", "require"].includes(cfg.ssl_mode);
 
   // 편집 시 비밀번호 칸이 비어 있으면 null(유지), "삭제" 체크 시 "" 전달
   const pwArg = (): string | null => (clearPassword ? "" : password ? password : props.isNew ? "" : null);
@@ -85,7 +88,15 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
     setTesting(true);
     setTestResult(null);
     try {
-      setTestResult({ ok: true, text: await api.testConnection(cfg, pwArg()) });
+      let text: string;
+      try {
+        text = await api.testConnection(cfg, pwArg());
+      } catch (e) {
+        // 호스트 키를 신뢰하기로 했으면 한 번만 다시 시도한다
+        if (!(await confirmHostKey(e))) throw e;
+        text = await api.testConnection(cfg, pwArg());
+      }
+      setTestResult({ ok: true, text });
     } catch (e) {
       setTestResult({ ok: false, text: errorMessage(e) });
     } finally {
@@ -111,7 +122,7 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
 
   const passwordRow = (
     <>
-      <label>비밀번호</label>
+      <label>{keyMode ? "passphrase" : "비밀번호"}</label>
       <div className="row">
         <input
           type="password"
@@ -223,7 +234,45 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
           </>
         )}
 
-        {!isLite && !isMongo && !isRedis && (
+        {remote && (
+          <>
+            {hostRow}
+            <label>사용자</label>
+            <input value={cfg.user} onChange={(e) => set("user", e.target.value)} />
+            {isSftp && (
+              <>
+                <label>인증 방식</label>
+                <div className="row">
+                  <label className="row">
+                    <input type="radio" name="ssh-auth" checked={!keyMode} onChange={() => set("ssh_key_path", null)} /> 비밀번호
+                  </label>
+                  <label className="row">
+                    <input type="radio" name="ssh-auth" checked={keyMode} onChange={() => set("ssh_key_path", cfg.ssh_key_path ?? "")} /> 키 파일
+                  </label>
+                </div>
+                {keyMode && (
+                  <>
+                    <label>키 파일</label>
+                    <div className="row">
+                      <input value={cfg.ssh_key_path ?? ""} placeholder="개인키 파일 경로" onChange={(e) => set("ssh_key_path", e.target.value)} />
+                      <button
+                        onClick={async () => {
+                          const p = await api.pickKeyFile();
+                          if (p) set("ssh_key_path", p);
+                        }}
+                      >
+                        찾기…
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+            {passwordRow}
+          </>
+        )}
+
+        {!isLite && !isMongo && !isRedis && !remote && (
           <>
             {hostRow}
             <label>데이터베이스</label>
@@ -269,7 +318,7 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
         <label className="row">
           <input type="checkbox" checked={cfg.read_only} onChange={(e) => set("read_only", e.target.checked)} />
           <span className="hint">
-            {isRedis || isMongo ? "쓰기 명령을 앱에서 거부합니다." : "DB 세션을 읽기 전용으로 엽니다."} 실수 방지 기능이며 보안 기능은 아닙니다.
+            {remote ? "업로드·삭제·수정을 앱에서 막습니다." : isRedis || isMongo ? "쓰기 명령을 앱에서 거부합니다." : "DB 세션을 읽기 전용으로 엽니다."} 실수 방지 기능이며 보안 기능은 아닙니다.
           </span>
         </label>
 

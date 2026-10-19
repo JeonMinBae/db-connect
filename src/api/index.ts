@@ -57,6 +57,8 @@ export const api = {
   testConnection: (config: ConnectionConfig, password: string | null) => invoke<string>("test_connection", { config, password }),
   connect: (id: string) => invoke<{ default_schema: string; topology: "standalone" | "replicaset" | "sharded" | null }>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),
+  remoteTrustHost: (host: string, port: number, fingerprint: string) => invoke<void>("remote_trust_host", { host, port, fingerprint }),
+  pickKeyFile: () => invoke<string | null>("pick_key_file"),
 
   // 메타데이터
   listSchemas: (connId: string) => invoke<string[]>("list_schemas", { connId }),

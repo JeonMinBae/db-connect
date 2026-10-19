@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { isSql, type ConnectionConfig, type SqlConfig } from "../api/types";
+import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "../api/types";
 import { openDropTable } from "./DropTableDialog";
 import { MongoTree, refreshMongoTree } from "./MongoTree";
 import { RedisTree, refreshRedisTree } from "./RedisTree";
@@ -13,7 +13,7 @@ import { confirmDialog } from "../store/ui";
 import { DbLogo } from "./dbLogos";
 import { Hl, Row, SubFolder } from "./TreeRow";
 import { blankConfig, ConnectionDialog } from "./dialogs/ConnectionDialog";
-import { showContextMenu } from "./ui";
+import { showContextMenu, type MenuEntry } from "./ui";
 
 const FILTER_THRESHOLD = 2000;
 /** 이만큼(px) 움직여야 드래그로 본다. 그 전에 떼면 평범한 클릭 */
@@ -191,7 +191,9 @@ function ConnectionNode({ cfg, onEdit }: { cfg: ConnectionConfig; onEdit: (cfg: 
   const defaultSchema = useConnections((s) => s.defaultSchema[cfg.id]);
   const { toggle, loadSchemas, invalidate } = useTree.getState();
   const openConsole = useTabs((s) => s.openConsole);
+  const openBrowser = useTabs((s) => s.openBrowser);
 
+  const remote = isRemote(cfg.driver);
   const sql = isSql(cfg.driver);
   const expand = async () => {
     if (open) return toggle(cfg.id, false);
@@ -217,8 +219,39 @@ function ConnectionNode({ cfg, onEdit }: { cfg: ConnectionConfig; onEdit: (cfg: 
     }
   }, [schemas, defaultSchema]);
 
+  const commonItems: MenuEntry[] = [
+    { label: "편집…", onClick: () => onEdit(cfg, false) },
+    { label: "복제…", onClick: () => onEdit({ ...cfg, id: crypto.randomUUID(), name: `${cfg.name} 복사본` }, true) },
+    {
+      label: "삭제",
+      onClick: async () => {
+        if (await confirmDialog({ title: "접속 삭제", body: `'${cfg.name}' 접속을 삭제할까요?\n저장된 비밀번호와 콘솔도 함께 삭제됩니다.`, okLabel: "삭제", danger: true })) {
+          useTabs.getState().closeForConnection(cfg.id);
+          invalidate(cfg.id);
+          await remove(cfg.id);
+        }
+      },
+    },
+  ];
+
+  const remoteMenu: MenuEntry[] = [
+    { label: "새 브라우저 탭", onClick: async () => (await connect(cfg.id)) && openBrowser(cfg.id, cfg.name, true) },
+    "sep",
+    { label: "연결", onClick: () => void connect(cfg.id), disabled: status === "connected" },
+    {
+      label: "연결 해제",
+      disabled: status !== "connected",
+      onClick: async () => {
+        if (!(await confirmLeave(cfg.id, "연결을 해제합니다."))) return;
+        await disconnect(cfg.id);
+      },
+    },
+    "sep",
+    ...commonItems,
+  ];
+
   const menu = (e: React.MouseEvent) =>
-    showContextMenu(e, [
+    showContextMenu(e, remote ? remoteMenu : [
       { label: "새 콘솔", onClick: async () => (await connect(cfg.id)) && openConsole(cfg.id, cfg.name, true) },
       "sep",
       { label: "연결", onClick: () => void expand(), disabled: status === "connected" },
@@ -238,18 +271,7 @@ function ConnectionNode({ cfg, onEdit }: { cfg: ConnectionConfig; onEdit: (cfg: 
         onClick: refresh,
       },
       "sep",
-      { label: "편집…", onClick: () => onEdit(cfg, false) },
-      { label: "복제…", onClick: () => onEdit({ ...cfg, id: crypto.randomUUID(), name: `${cfg.name} 복사본` }, true) },
-      {
-        label: "삭제",
-        onClick: async () => {
-          if (await confirmDialog({ title: "접속 삭제", body: `'${cfg.name}' 접속을 삭제할까요?\n저장된 비밀번호와 콘솔도 함께 삭제됩니다.`, okLabel: "삭제", danger: true })) {
-            useTabs.getState().closeForConnection(cfg.id);
-            invalidate(cfg.id);
-            await remove(cfg.id);
-          }
-        },
-      },
+      ...commonItems,
     ]);
 
   return (
@@ -259,8 +281,9 @@ function ConnectionNode({ cfg, onEdit }: { cfg: ConnectionConfig; onEdit: (cfg: 
         className="conn-head"
         nodeId={cfg.id}
         open={open}
+        leaf={remote}
         onToggle={expand}
-        onDoubleClick={async () => (await connect(cfg.id)) && openConsole(cfg.id, cfg.name)}
+        onDoubleClick={async () => (await connect(cfg.id)) && (remote ? openBrowser(cfg.id, cfg.name) : openConsole(cfg.id, cfg.name))}
         onContextMenu={menu}
       >
         {cfg.color && <span className="conn-color" style={{ background: cfg.color }} />}

@@ -9,7 +9,9 @@ export type Tab =
   | { kind: "structure"; id: string; connId: string; schema: string; table: string; title: string; isNew?: boolean }
   /** key: 텍스트 키 이름, 바이너리 키는 redis-cli 이스케이프 표기 (binary: true) */
   | { kind: "redisKey"; id: string; connId: string; db: number; key: string; binary?: boolean; title: string }
-  | { kind: "mongoColl"; id: string; connId: string; db: string; coll: string; title: string };
+  | { kind: "mongoColl"; id: string; connId: string; db: string; coll: string; title: string }
+  | { kind: "remoteBrowser"; id: string; connId: string; title: string }
+  | { kind: "remoteFile"; id: string; connId: string; path: string; title: string };
 
 /** 닫기 전에 확인이 필요한 이유의 출처. 출처별로 따로 저장해 서로 덮어쓰지 않는다. */
 export type DirtySource = "tx" | "edit";
@@ -36,6 +38,8 @@ interface TabsState {
   pendingFor: (connId: string, schema: string, table: string, except?: string) => Tab | undefined;
   openRedisKey: (connId: string, db: number, key: string, binary?: boolean) => void;
   openMongoColl: (connId: string, db: string, coll: string) => void;
+  openBrowser: (connId: string, connName: string, forceNew?: boolean) => void;
+  openRemoteFile: (connId: string, path: string) => void;
   renameRedisKey: (connId: string, db: number, key: string, newKey: string | null) => void;
   /** 확인 후 닫는다. 닫았으면 true */
   close: (id: string) => Promise<boolean>;
@@ -51,10 +55,15 @@ const isTableTab = (t: Tab, connId: string, schema: string, table: string) =>
 
 const newId = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 
+/** 원격 파일 탭은 재시작 시 복원하지 않는다 (요구사항: 세션 한정) */
+const persistable = (t: Tab) => t.kind !== "remoteBrowser" && t.kind !== "remoteFile";
+
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 const persist = (s: Pick<TabsState, "tabs" | "activeId">) => {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void api.saveWorkspace({ tabs: s.tabs, activeId: s.activeId }), 300);
+  const tabs = s.tabs.filter(persistable);
+  const activeId = tabs.some((t) => t.id === s.activeId) ? s.activeId : (tabs[0]?.id ?? null);
+  saveTimer = setTimeout(() => void api.saveWorkspace({ tabs, activeId }), 300);
 };
 
 /** 탭 하나의 확인 문구 (없으면 null) */
@@ -87,7 +96,8 @@ export const useTabs = create<TabsState>((set, get) => {
     restore: async () => {
       try {
         const ws = (await api.loadWorkspace()) as { tabs?: Tab[]; activeId?: string | null } | null;
-        if (ws?.tabs?.length) set({ tabs: ws.tabs, activeId: ws.activeId ?? ws.tabs[0].id });
+        const tabs = ws?.tabs?.filter(persistable);
+        if (tabs?.length) set({ tabs, activeId: tabs.some((t) => t.id === ws!.activeId) ? ws!.activeId : tabs[0].id });
       } finally {
         set({ restored: true });
       }
@@ -166,6 +176,23 @@ export const useTabs = create<TabsState>((set, get) => {
       const existing = get().tabs.find((t) => t.kind === "mongoColl" && t.connId === connId && t.db === db && t.coll === coll);
       if (existing) return get().activate(existing.id);
       const tab: Tab = { kind: "mongoColl", id: newId(), connId, db, coll, title: coll };
+      set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+      persist(get());
+    },
+
+    openBrowser: (connId, connName, forceNew) => {
+      const existing = !forceNew && get().tabs.find((t) => t.kind === "remoteBrowser" && t.connId === connId);
+      if (existing) return get().activate(existing.id);
+      const n = get().tabs.filter((t) => t.kind === "remoteBrowser" && t.connId === connId).length;
+      const tab: Tab = { kind: "remoteBrowser", id: newId(), connId, title: n ? `${connName} (${n + 1})` : connName };
+      set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
+      persist(get());
+    },
+
+    openRemoteFile: (connId, path) => {
+      const existing = get().tabs.find((t) => t.kind === "remoteFile" && t.connId === connId && t.path === path);
+      if (existing) return get().activate(existing.id);
+      const tab: Tab = { kind: "remoteFile", id: newId(), connId, path, title: path.split("/").filter(Boolean).pop() ?? path };
       set((s) => ({ tabs: [...s.tabs, tab], activeId: tab.id }));
       persist(get());
     },

@@ -527,6 +527,13 @@ body.conn-dragging {
 .select-list .item.selected {
   background: var(--sel);
 }
+.select-list .group {
+  padding: 4px 8px 2px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
 .driver {
   font-size: 9px;
   font-weight: 700;
