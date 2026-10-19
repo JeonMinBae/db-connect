@@ -15,6 +15,8 @@ interface TreeState {
   columns: Record<string, Loaded<ColumnMeta>>;
   indexes: Record<string, Loaded<IndexInfo>>;
   toggle: (key: string, open?: boolean) => void;
+  /** 검색 결과가 보이도록 keys 를 펼친다. null 이면 검색 종료: 자동으로 펼친 것만 되돌린다 */
+  applySearchOpen: (keys: string[] | null) => void;
   loadIndexes: (connId: string, schema: string, table: string, force?: boolean) => Promise<void>;
   loadSchemas: (connId: string, force?: boolean) => Promise<void>;
   loadTables: (connId: string, schema: string, force?: boolean) => Promise<void>;
@@ -27,7 +29,13 @@ interface TreeState {
   structureChanged: (connId: string, schema: string, table: string) => Promise<void>;
 }
 
-const dropPrefix = <T>(rec: Record<string, T>, connId: string) =>
+/** 검색이 자동으로 펼친 키 → 펼치기 전 값(undefined = 기본값). 검색을 끝내면 이 값으로 되돌린다 */
+const autoOpened = new Map<string, boolean | undefined>();
+/** 검색 중 사용자가 직접 펼치거나 접은 키. 다시 자동으로 펼치거나 되돌리지 않는다 */
+const touched = new Set<string>();
+let searching = false;
+
+const dropPrefix =<T>(rec: Record<string, T>, connId: string) =>
   Object.fromEntries(Object.entries(rec).filter(([k]) => k !== connId && !k.startsWith(connId + "\u0000")));
 
 export const useTree = create<TreeState>((set, get) => ({
@@ -37,7 +45,36 @@ export const useTree = create<TreeState>((set, get) => ({
   columns: {},
   indexes: {},
 
-  toggle: (key, open) => set((s) => ({ expanded: { ...s.expanded, [key]: open ?? !s.expanded[key] } })),
+  toggle: (key, open) => {
+    if (searching) {
+      autoOpened.delete(key);
+      touched.add(key);
+    }
+    set((s) => ({ expanded: { ...s.expanded, [key]: open ?? !s.expanded[key] } }));
+  },
+
+  applySearchOpen: (keys) =>
+    set((s) => {
+      const want = new Set(keys);
+      const expanded = { ...s.expanded };
+      let changed = false;
+      for (const [k, prev] of autoOpened) {
+        if (want.has(k)) continue;
+        if (prev === undefined) delete expanded[k];
+        else expanded[k] = prev;
+        autoOpened.delete(k);
+        changed = true;
+      }
+      for (const k of want) {
+        if (touched.has(k) || autoOpened.has(k) || expanded[k] === true) continue;
+        autoOpened.set(k, expanded[k]);
+        expanded[k] = true;
+        changed = true;
+      }
+      searching = keys !== null;
+      if (!searching) touched.clear();
+      return changed ? { expanded } : s;
+    }),
 
   loadSchemas: async (connId, force) => {
     if (!force && get().schemas[connId]) return;

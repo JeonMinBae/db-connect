@@ -109,6 +109,13 @@ pub fn remove(dir: &Path, id: &str) -> AppResult<()> {
     save(dir, &list)
 }
 
+/// ids 순서대로 정렬한다. ids에 없는 접속은 기존 순서를 지켜 뒤에 둔다 (sort_by_key는 안정 정렬)
+pub fn reorder(dir: &Path, ids: &[String]) -> AppResult<()> {
+    let mut list = load(dir)?;
+    list.sort_by_key(|c| ids.iter().position(|id| *id == c.id).unwrap_or(usize::MAX));
+    save(dir, &list)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +137,17 @@ mod tests {
         remove(dir.path(), "a").unwrap();
         assert_eq!(load(dir.path()).unwrap().len(), 1);
         assert!(get(dir.path(), "a").is_err());
+    }
+
+    #[test]
+    fn reorder_keeps_unknown_at_end() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["a", "b", "c", "d"] {
+            upsert(dir.path(), cfg(id, id)).unwrap();
+        }
+        reorder(dir.path(), &["c".into(), "a".into(), "x".into()]).unwrap();
+        let ids: Vec<_> = load(dir.path()).unwrap().into_iter().map(|c| c.id).collect();
+        assert_eq!(ids, ["c", "a", "b", "d"]);
     }
 
     #[test]

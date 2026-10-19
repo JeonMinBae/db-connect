@@ -6,7 +6,7 @@ import { useConnections } from "../store/connections";
 import { useTabs } from "../store/tabs";
 import { nodeKey, useTree } from "../store/tree";
 import { sizeText } from "../redis/view";
-import { Row, SubFolder } from "./TreeRow";
+import { Hl, Row, SubFolder } from "./TreeRow";
 import { showContextMenu } from "./ui";
 
 export function refreshMongoTree(connId: string) {
@@ -83,6 +83,7 @@ function CollNode({ cfg, db, coll, depth }: { cfg: ConnectionConfig; db: string;
     <>
       <Row
         depth={depth}
+        nodeId={k}
         open={open}
         leaf={isView}
         onToggle={() => !isView && useTree.getState().toggle(k)}
@@ -95,7 +96,7 @@ function CollNode({ cfg, db, coll, depth }: { cfg: ConnectionConfig; db: string;
         }
       >
         <span>{isView ? "👁" : "▤"}</span>
-        <span>{coll.name}</span>
+        <Hl text={coll.name} />
         {coll.estimated != null && <span className="type">{coll.estimated.toLocaleString()}</span>}
       </Row>
       {open && !isView && <IndexFolder cfg={cfg} db={db} coll={coll.name} depth={depth + 1} />}
@@ -118,9 +119,9 @@ function IndexFolder({ cfg, db, coll, depth }: { cfg: ConnectionConfig; db: stri
             const keys = formatShell(ix.keys);
             const opts = [ix.unique && "unique", ix.ttl != null && `TTL ${ix.ttl}초`, ix.partial && "partial"].filter(Boolean).join(", ");
             return (
-              <Row key={ix.name} depth={depth + 1} leaf title={`인덱스 ${ix.name}\n키: ${keys}${opts ? `\n옵션: ${opts}` : ""}`}>
+              <Row key={ix.name} depth={depth + 1} nodeId={nodeKey(fk, ix.name)} leaf title={`인덱스 ${ix.name}\n키: ${keys}${opts ? `\n옵션: ${opts}` : ""}`}>
                 <span>{ix.name === "_id_" ? "🔑" : "⚲"}</span>
-                <span>{ix.name}</span>
+                <Hl text={ix.name} />
                 <span className="type">{ix.unique ? "UNIQUE" : ix.ttl != null ? "TTL" : ""}</span>
               </Row>
             );

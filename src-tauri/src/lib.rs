@@ -20,6 +20,7 @@ pub fn run() {
             commands::conn::list_connections,
             commands::conn::save_connection,
             commands::conn::delete_connection,
+            commands::conn::reorder_connections,
             commands::conn::test_connection,
             commands::conn::connect,
             commands::conn::disconnect,

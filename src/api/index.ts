@@ -53,6 +53,7 @@ export const api = {
   listConnections: () => invoke<ConnectionConfig[]>("list_connections"),
   saveConnection: (config: ConnectionConfig, password: string | null) => invoke<void>("save_connection", { config, password }),
   deleteConnection: (id: string) => invoke<void>("delete_connection", { id }),
+  reorderConnections: (ids: string[]) => invoke<void>("reorder_connections", { ids }),
   testConnection: (config: ConnectionConfig, password: string | null) => invoke<string>("test_connection", { config, password }),
   connect: (id: string) => invoke<{ default_schema: string; topology: "standalone" | "replicaset" | "sharded" | null }>("connect", { id }),
   disconnect: (id: string) => invoke<void>("disconnect", { id }),

@@ -7,7 +7,7 @@ import { SCAN_BATCH, useRedisTree } from "../redis/store";
 import { useTabs } from "../store/tabs";
 import { nodeKey } from "../store/tree";
 import { confirmDialog, promptDialog, toast } from "../store/ui";
-import { Row, SubFolder } from "./TreeRow";
+import { Hl, Row, SubFolder } from "./TreeRow";
 import { showContextMenu } from "./ui";
 
 const TYPE_BADGE: Record<string, string> = { string: "STR", hash: "HASH", list: "LIST", set: "SET", zset: "ZSET", stream: "STRM" };
@@ -138,7 +138,7 @@ function DbKeys({ cfg, db }: { cfg: ConnectionConfig; db: number }) {
         </Row>
       )}
       {scan && !scan.loading && !scan.done && (
-        <Row depth={2} leaf onToggle={() => void useRedisTree.getState().scan(cfg.id, db)} title="SCAN으로 다음 키를 더 받습니다">
+        <Row depth={2} nodeId={nodeKey(cfg.id, `db${db}`, "#more")} leaf onToggle={() => void useRedisTree.getState().scan(cfg.id, db)} title="SCAN으로 다음 키를 더 받습니다">
           <span className="link">⋯ 더 불러오기 ({SCAN_BATCH}개)</span>
           <span className="type">{scan.keys.length.toLocaleString()}개 받음</span>
         </Row>
@@ -178,6 +178,7 @@ function KeyRow({ cfg, db, label, k, depth }: { cfg: ConnectionConfig; db: numbe
   return (
     <Row
       depth={depth}
+      nodeId={nodeKey(cfg.id, `db${db}`, "#key:" + keyId(k.name))}
       leaf
       title={showBytes(k.name)}
       onDoubleClick={open}
@@ -189,7 +190,7 @@ function KeyRow({ cfg, db, label, k, depth }: { cfg: ConnectionConfig; db: numbe
       }
     >
       <span className={`key-type t-${k.type}`}>{TYPE_BADGE[k.type] ?? k.type.toUpperCase()}</span>
-      <span>{label}</span>
+      <Hl text={label} />
     </Row>
   );
 }

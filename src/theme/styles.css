@@ -173,11 +173,39 @@ textarea:focus {
   white-space: nowrap;
   cursor: default;
 }
+.tree:focus {
+  outline: none;
+}
+.tree-search {
+  padding: 4px 6px;
+}
+.tree-search input {
+  width: 100%;
+}
+/* 검색 일치 부분. 어두운 테마에서도 같은 노란색에 검은 글자로 둔다 */
+mark.hl {
+  background: #ffe066;
+  color: #1f2328;
+  border-radius: 2px;
+}
 .tree-row:hover {
   background: var(--bg-3);
 }
 .tree-row.selected {
   background: var(--sel);
+}
+.conn-group.dragging {
+  opacity: 0.5;
+}
+.conn-group.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.conn-group.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+body.conn-dragging {
+  cursor: grabbing;
+  user-select: none;
 }
 .tree-row .twisty {
   width: 12px;

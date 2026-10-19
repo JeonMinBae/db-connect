@@ -38,6 +38,11 @@ pub fn save_connection(state: State<'_, AppState>, mut config: ConnectionConfig,
 }
 
 #[tauri::command]
+pub fn reorder_connections(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
+    config::reorder(&state.data_dir, &ids)
+}
+
+#[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppResult<()> {
     disconnect(state.clone(), id.clone()).await?;
     config::remove(&state.data_dir, &id)?;

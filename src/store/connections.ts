@@ -20,6 +20,8 @@ interface ConnState {
   /** 저장한다. 연결 중이면 새 설정으로 다시 연결한다 (미커밋·보류 변경이 있으면 먼저 묻는다). 취소하면 false */
   save: (cfg: ConnectionConfig, password: string | null) => Promise<boolean>;
   remove: (id: string) => Promise<void>;
+  /** 사이드바 순서를 바꾼다. 화면에 먼저 반영하고, 저장에 실패하면 다시 불러온다 */
+  reorder: (ids: string[]) => Promise<void>;
   connect: (id: string) => Promise<boolean>;
   disconnect: (id: string) => Promise<void>;
   refreshSnapshot: (id: string) => Promise<void>;
@@ -55,6 +57,17 @@ export const useConnections = create<ConnState>((set, get) => ({
       return { status };
     });
     await get().load();
+  },
+
+  reorder: async (ids) => {
+    const byId = new Map(get().configs.map((c) => [c.id, c]));
+    set({ configs: ids.flatMap((id) => byId.get(id) ?? []) });
+    try {
+      await api.reorderConnections(ids);
+    } catch (e) {
+      toast(`순서 저장 실패: ${errorMessage(e)}`, "error");
+      await get().load();
+    }
   },
 
   connect: async (id) => {
