@@ -13,8 +13,11 @@ import { TransferConflictHost } from "./components/remote/TransferPanel";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
 import { BrowserTab } from "./components/remote/BrowserTab";
+import { RemoteFileTab } from "./components/remote/RemoteFileTab";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
-import { useTabs, type Tab } from "./store/tabs";
+import { dirtyMessage, useTabs, type Tab } from "./store/tabs";
+import { confirmDialog } from "./store/ui";
 import { useColorScheme, type Scheme } from "./theme";
 import { installDropListener } from "./remote/drops";
 import { installTransferListeners } from "./remote/transfers";
@@ -42,8 +45,7 @@ function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionCon
   }
   if (isRemote(cfg.driver)) {
     if (t.kind === "remoteBrowser") return <BrowserTab tabId={t.id} cfg={cfg} active={active} />;
-    // 편집 탭은 이후 작업에서 연결한다
-    return <div className="empty">준비 중</div>;
+    if (t.kind === "remoteFile") return <RemoteFileTab tabId={t.id} cfg={cfg} path={t.path} scheme={scheme} active={active} />;
   }
   return <div className="empty">이 접속에서는 열 수 없는 탭입니다</div>;
 }
@@ -85,6 +87,19 @@ export default function App() {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("contextmenu", noMenu);
     };
+  }, []);
+
+  // 저장하지 않은 탭이 있으면 종료 전에 확인한다
+  useEffect(() => {
+    const un = getCurrentWindow().onCloseRequested(async (e) => {
+      const { tabs, dirty } = useTabs.getState();
+      const lines = tabs.filter((t) => dirtyMessage(dirty[t.id])).map((t) => `• ${t.title}`);
+      if (!lines.length) return;
+      e.preventDefault();
+      if (await confirmDialog({ title: "종료", body: `저장하지 않은 탭이 있습니다.\n\n${lines.join("\n")}\n\n그래도 종료할까요?`, okLabel: "종료", danger: true }))
+        await getCurrentWindow().destroy();
+    });
+    return () => void un.then((f) => f());
   }, []);
 
   const cfgOf = (id: string) => configs.find((c) => c.id === id);
