@@ -21,3 +21,26 @@ services:
       TLS_CN: localhost
       TLS_ORG: test
       TLS_C: KR
+  # S3 호환. minio/minio·minio/mc 이미지는 Docker Hub 에서 내려가 rustfs(S3 API, 포트 9000)로 대체.
+  # 버킷 it-bucket 은 아래 일회성 컨테이너가 만든다
+  s3:
+    image: rustfs/rustfs
+    ports:
+      - "9000:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: minioadmin
+      RUSTFS_SECRET_KEY: minioadmin
+  s3-init:
+    image: amazon/aws-cli
+    depends_on:
+      - s3
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until aws --endpoint-url http://s3:9000 s3 mb s3://it-bucket || aws --endpoint-url http://s3:9000 s3 ls s3://it-bucket; do sleep 1; done

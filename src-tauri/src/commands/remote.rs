@@ -110,6 +110,24 @@ pub async fn remote_delete(state: State<'_, AppState>, conn_id: String, paths: V
     .await
 }
 
+/// S3 파일의 사전서명 GET URL (만료 1초~7일)
+#[tauri::command]
+pub async fn remote_presign(state: State<'_, AppState>, conn_id: String, path: String, expires_secs: u32) -> AppResult<String> {
+    if !(1..=604800).contains(&expires_secs) {
+        return Err(AppError::user("만료 시간은 1초에서 7일 사이여야 합니다"));
+    }
+    let r = state.remote(&conn_id).await?;
+    if r.cfg.driver != crate::store::config::Driver::S3 {
+        return Err(AppError::user("S3 접속에서만 사용할 수 있습니다"));
+    }
+    let path = path::normalize(&path);
+    r.run(|s| {
+        let path = path.clone();
+        Box::pin(async move { s.presign(&path, expires_secs).await })
+    })
+    .await
+}
+
 /// 질문이 끝나거나(응답) 중지돼 future 가 버려질 때 대기열에서 지운다
 struct AskGuard {
     app: AppHandle,

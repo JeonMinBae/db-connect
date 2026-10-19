@@ -76,8 +76,8 @@ fn test_env(answer: Option<crate::remote::transfer::Answer>) -> crate::remote::t
 }
 
 /// 프로토콜 공통: 재귀 업로드·다운로드, 충돌 응답. base 는 존재하지 않는 새 경로.
-async fn transfer_scenario(cfg: &ConnectionConfig, data_dir: &std::path::Path, base: String) {
-    let open = || async { Session::open(cfg, Some("test"), data_dir).await.unwrap() };
+async fn transfer_scenario(cfg: &ConnectionConfig, data_dir: &std::path::Path, secret: &str, base: String) {
+    let open = || async { Session::open(cfg, Some(secret), data_dir).await.unwrap() };
 
     // 로컬 트리: dir/a.txt, dir/sub/b.bin, dir/sub/deep/c.txt
     let src = tempfile::tempdir().unwrap();
@@ -175,7 +175,7 @@ async fn sftp_scenario() {
     let (mut s, d) = trusted_sftp().await;
     scenario(&mut s, &format!("/upload/it-{}", uuid::Uuid::new_v4())).await;
     text_scenario(&mut s, format!("/upload/it-{}.txt", uuid::Uuid::new_v4())).await;
-    transfer_scenario(&sftp_cfg(), d.path(), format!("/upload/it-{}", uuid::Uuid::new_v4())).await;
+    transfer_scenario(&sftp_cfg(), d.path(), "test", format!("/upload/it-{}", uuid::Uuid::new_v4())).await;
 }
 
 fn ftp_cfg() -> ConnectionConfig {
@@ -194,7 +194,7 @@ async fn ftp_all(cfg: &ConnectionConfig) {
     let mut s = Session::open(cfg, Some("test"), &tmp()).await.unwrap();
     scenario(&mut s, &format!("/it-{}", uuid::Uuid::new_v4())).await;
     text_scenario(&mut s, format!("/it-{}.txt", uuid::Uuid::new_v4())).await;
-    transfer_scenario(cfg, &tmp(), format!("/it-{}", uuid::Uuid::new_v4())).await;
+    transfer_scenario(cfg, &tmp(), "test", format!("/it-{}", uuid::Uuid::new_v4())).await;
 }
 
 #[tokio::test]
@@ -241,4 +241,78 @@ async fn ftp_euc_kr_names() {
     let raw: Vec<_> = u.list(&base).await.unwrap().into_iter().map(|e| e.name).collect();
     assert_ne!(raw, ["폴더"]);
     assert_eq!(ops::delete_tree(&mut s, &base).await.unwrap(), 1);
+}
+
+fn s3_cfg(bucket: &str) -> ConnectionConfig {
+    ConnectionConfig {
+        driver: Driver::S3,
+        user: "minioadmin".into(),
+        s3_endpoint: "http://localhost:9000".into(),
+        s3_region: "us-east-1".into(),
+        s3_bucket: bucket.into(),
+        s3_path_style: true,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn s3_scenarios() {
+    let cfg = s3_cfg("it-bucket");
+    let mut s = Session::open(&cfg, Some("minioadmin"), &tmp()).await.unwrap();
+    scenario(&mut s, &format!("/it-{}", uuid::Uuid::new_v4())).await;
+    text_scenario(&mut s, format!("/it-{}.txt", uuid::Uuid::new_v4())).await;
+    transfer_scenario(&cfg, &tmp(), "minioadmin", format!("/it-{}", uuid::Uuid::new_v4())).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn s3_buckets_and_empty_folder() {
+    let mut s = Session::open(&s3_cfg(""), Some("minioadmin"), &tmp()).await.unwrap();
+    let root: Vec<_> = s.list("/").await.unwrap();
+    assert!(root.iter().any(|e| e.dir && e.name == "it-bucket"), "{root:?}");
+    assert!(matches!(s.mkdir("/new-bucket").await, Err(AppError::User(_))));
+    assert!(matches!(s.rename("/it-bucket", "/other").await, Err(AppError::User(_))));
+
+    // 빈 폴더(마커 객체)가 목록에 보이고, 마커 자신은 숨겨진다
+    let base = format!("/it-bucket/it-{}", uuid::Uuid::new_v4());
+    s.mkdir(&base).await.unwrap();
+    s.mkdir(&format!("{base}/빈 폴더")).await.unwrap();
+    let names: Vec<_> = s.list(&base).await.unwrap().into_iter().map(|e| (e.name, e.dir)).collect();
+    assert_eq!(names, [("빈 폴더".to_string(), true)]);
+    assert!(s.stat(&format!("{base}/빈 폴더")).await.unwrap().is_some_and(|(e, _)| e.dir));
+    assert!(s.stat(&format!("{base}/nope")).await.unwrap().is_none());
+
+    // 폴더 이름 변경은 하위 전체를 옮긴다
+    s.write_all(&format!("{base}/빈 폴더/a b.txt"), b"hi").await.unwrap();
+    let moved = format!("{base}/moved");
+    s.rename(&format!("{base}/빈 폴더"), &moved).await.unwrap();
+    assert!(s.stat(&format!("{base}/빈 폴더")).await.unwrap().is_none());
+    assert_eq!(s.read_all(&format!("{moved}/a b.txt"), 100).await.unwrap(), b"hi");
+
+    // 1000개 초과 목록도 끝까지 읽는다 (페이지네이션)
+    for i in 0..1005 {
+        s.write_all(&format!("{base}/many/f{i:04}"), b"").await.unwrap();
+    }
+    assert_eq!(s.list(&format!("{base}/many")).await.unwrap().len(), 1005);
+    assert_eq!(ops::delete_tree(&mut s, &base).await.unwrap(), 1006);
+}
+
+#[tokio::test]
+#[ignore]
+async fn s3_presign_and_bad_key() {
+    let mut s = Session::open(&s3_cfg("it-bucket"), Some("minioadmin"), &tmp()).await.unwrap();
+    let p = format!("/it-{}.txt", uuid::Uuid::new_v4());
+    s.write_all(&p, "사전서명 본문".as_bytes()).await.unwrap();
+    let url = s.presign(&p, 60).await.unwrap();
+    let out = tmp().join(format!("presign-{}.out", uuid::Uuid::new_v4()));
+    let code = std::process::Command::new("curl").args(["-s", "-o"]).arg(&out).args(["-w", "%{http_code}", &url]).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&code.stdout), "200");
+    assert_eq!(std::fs::read(&out).unwrap(), "사전서명 본문".as_bytes());
+    let _ = std::fs::remove_file(&out);
+    assert!(s.presign("/", 60).await.is_err());
+    s.remove_file(&p).await.unwrap();
+
+    let mut bad = Session::open(&s3_cfg("it-bucket"), Some("wrong-secret"), &tmp()).await.unwrap();
+    assert!(matches!(bad.list("/").await, Err(AppError::User(_))));
 }

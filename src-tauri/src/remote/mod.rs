@@ -5,6 +5,7 @@ pub mod known_hosts;
 pub mod ops;
 pub mod path;
 pub mod picks;
+pub mod s3;
 pub mod sftp;
 pub mod text;
 pub mod transfer;
@@ -47,6 +48,7 @@ pub struct Stamp {
 pub enum Session {
     Sftp(sftp::SftpSession),
     Ftp(ftp::FtpSession),
+    S3(s3::S3Session),
 }
 
 impl Session {
@@ -54,7 +56,7 @@ impl Session {
         match cfg.driver {
             Driver::Sftp => Ok(Self::Sftp(sftp::SftpSession::open(cfg, secret, data_dir).await?)),
             Driver::Ftp => Ok(Self::Ftp(ftp::FtpSession::open(cfg, secret).await?)),
-            Driver::S3 => Err(AppError::user("파일 접속은 아직 지원하지 않습니다")),
+            Driver::S3 => Ok(Self::S3(s3::S3Session::open(cfg, secret).await?)),
             _ => Err(AppError::user("파일 접속이 아닙니다")),
         }
     }
@@ -62,7 +64,7 @@ impl Session {
     /// FTP 유휴 연결 유지용 (SFTP 는 russh 가 자체 keepalive)
     pub async fn noop(&mut self) -> AppResult<()> {
         match self {
-            Self::Sftp(_) => Ok(()),
+            Self::Sftp(_) | Self::S3(_) => Ok(()),
             Self::Ftp(s) => s.noop().await,
         }
     }
@@ -71,6 +73,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.list(path).await,
             Self::Ftp(s) => s.list(path).await,
+            Self::S3(s) => s.list(path).await,
         }
     }
 
@@ -78,6 +81,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.stat(path).await,
             Self::Ftp(s) => s.stat(path).await,
+            Self::S3(s) => s.stat(path).await,
         }
     }
 
@@ -85,6 +89,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.mkdir(path).await,
             Self::Ftp(s) => s.mkdir(path).await,
+            Self::S3(s) => s.mkdir(path).await,
         }
     }
 
@@ -92,6 +97,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.rename(from, to).await,
             Self::Ftp(s) => s.rename(from, to).await,
+            Self::S3(s) => s.rename(from, to).await,
         }
     }
 
@@ -99,6 +105,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.remove_file(path).await,
             Self::Ftp(s) => s.remove_file(path).await,
+            Self::S3(s) => s.remove_file(path).await,
         }
     }
 
@@ -106,6 +113,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.remove_dir(path).await,
             Self::Ftp(s) => s.remove_dir(path).await,
+            Self::S3(s) => s.remove_dir(path).await,
         }
     }
 
@@ -113,6 +121,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.is_link(path).await,
             Self::Ftp(s) => s.is_link(path).await,
+            Self::S3(s) => s.is_link(path).await,
         }
     }
 
@@ -121,6 +130,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.read_all(path, limit).await,
             Self::Ftp(s) => s.read_all(path, limit).await,
+            Self::S3(s) => s.read_all(path, limit).await,
         }
     }
 
@@ -129,6 +139,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.write_all(path, bytes).await,
             Self::Ftp(s) => s.write_all(path, bytes).await,
+            Self::S3(s) => s.write_all(path, bytes).await,
         }
     }
 
@@ -136,6 +147,15 @@ impl Session {
         match self {
             Self::Sftp(s) => s.upload(path, reader, len, counter).await,
             Self::Ftp(s) => s.upload(path, reader, len, counter).await,
+            Self::S3(s) => s.upload(path, reader, len, counter).await,
+        }
+    }
+
+    /// S3 전용: 사전서명 GET URL
+    pub async fn presign(&mut self, path: &str, expires_secs: u32) -> AppResult<String> {
+        match self {
+            Self::S3(s) => s.presign(path, expires_secs).await,
+            _ => Err(AppError::user("S3 접속에서만 사용할 수 있습니다")),
         }
     }
 
@@ -143,6 +163,7 @@ impl Session {
         match self {
             Self::Sftp(s) => s.download(path, writer, counter).await,
             Self::Ftp(s) => s.download(path, writer, counter).await,
+            Self::S3(s) => s.download(path, writer, counter).await,
         }
     }
 }
@@ -229,6 +250,7 @@ pub async fn test(cfg: &ConnectionConfig, secret: Option<&str>, data_dir: &Path)
         Driver::Sftp => "SFTP 접속 성공".to_string(),
         Driver::Ftp if cfg.ftp_tls != FtpTls::None => "FTPS 접속 성공".to_string(),
         Driver::Ftp => "FTP 접속 성공".to_string(),
+        Driver::S3 => "S3 접속 성공".to_string(),
         _ => "접속 성공".to_string(),
     })
 }

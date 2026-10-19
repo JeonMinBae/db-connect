@@ -38,8 +38,25 @@ export function blankConfig(): ConnectionConfig {
   };
 }
 
+type S3Preset = "aws" | "r2" | "minio" | "custom";
+const S3_PRESETS: Record<Exclude<S3Preset, "custom">, Pick<ConnectionConfig, "s3_endpoint" | "s3_region" | "s3_path_style">> = {
+  aws: { s3_endpoint: "", s3_region: "ap-northeast-2", s3_path_style: false },
+  r2: { s3_endpoint: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com", s3_region: "auto", s3_path_style: true },
+  minio: { s3_endpoint: "http://localhost:9000", s3_region: "us-east-1", s3_path_style: true },
+};
+const guessPreset = (c: ConnectionConfig): S3Preset =>
+  !c.s3_endpoint ? "aws" : c.s3_endpoint.includes("r2.cloudflarestorage.com") ? "r2" : c.s3_endpoint === S3_PRESETS.minio.s3_endpoint ? "minio" : "custom";
+
 /** URI에서 호스트 부분 (이름 자동 생성용) */
 const uriHost = (uri: string) => uri.replace(/^mongodb(\+srv)?:\/\//, "").replace(/^[^@/]*@/, "").split(/[/?]/)[0];
+/** endpoint URL 의 host (파싱 실패 시 빈 문자열) */
+const endpointHost = (url: string) => {
+  try {
+    return new URL(url.trim()).host;
+  } catch {
+    return "";
+  }
+};
 /** URI에 비밀번호가 들어 있는지 (user:pass@) */
 const uriHasPassword = (uri: string) => /^mongodb(\+srv)?:\/\/[^@/?]*:[^@/?]*@/.test(uri.trim());
 
@@ -47,6 +64,7 @@ const uriHasPassword = (uri: string) => /^mongodb(\+srv)?:\/\/[^@/?]*:[^@/?]*@/.
 export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: boolean; onClose: () => void }) {
   const [cfg, setCfg] = useState(props.initial);
   const [password, setPassword] = useState("");
+  const [preset, setPreset] = useState<S3Preset>(() => guessPreset(props.initial));
   const [clearPassword, setClearPassword] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -58,6 +76,7 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
   const isMongo = d === "mongodb";
   const remote = isRemote(d);
   const isSftp = d === "sftp";
+  const isS3 = d === "s3";
   const isFtp = d === "ftp";
   const keyMode = isSftp && cfg.ssh_key_path !== null;
   const isLocal = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(cfg.host.trim().toLowerCase());
@@ -118,13 +137,16 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
     if (isLite) return cfg.sqlite_path.split(/[\\/]/).pop();
     if (isMongo) return uriHost(cfg.mongo_uri);
     if (isRedis) return `${cfg.host}:${cfg.port}`;
+    if (isS3) return cfg.s3_bucket.trim() || endpointHost(cfg.s3_endpoint) || "S3";
     return `${cfg.user}@${cfg.host}`;
   };
 
   const submit = async () => {
     const name = cfg.name.trim() || autoName() || "접속";
     try {
-      if (await save({ ...cfg, name }, pwArg())) props.onClose();
+      // 접두어는 앞뒤 '/' 없이 저장한다 (백엔드는 trim 된 값을 가정)
+      const s3_prefix = cfg.s3_prefix.replace(/^\/+|\/+$/g, "");
+      if (await save({ ...cfg, name, s3_prefix }, pwArg())) props.onClose();
     } catch (e) {
       toast(errorMessage(e), "error");
     }
@@ -132,7 +154,7 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
 
   const passwordRow = (
     <>
-      <label>{keyMode ? "passphrase" : "비밀번호"}</label>
+      <label>{keyMode ? "passphrase" : isS3 ? "Secret Key" : "비밀번호"}</label>
       <div className="row">
         <input
           type="password"
@@ -244,7 +266,47 @@ export function ConnectionDialog(props: { initial: ConnectionConfig; isNew: bool
           </>
         )}
 
-        {remote && (
+        {isS3 && (
+          <>
+            <label>프리셋</label>
+            <select
+              value={preset}
+              onChange={(e) => {
+                const v = e.target.value as S3Preset;
+                setPreset(v);
+                if (v !== "custom") setCfg((c) => ({ ...c, ...S3_PRESETS[v] }));
+              }}
+            >
+              <option value="aws">AWS S3</option>
+              <option value="r2">Cloudflare R2</option>
+              <option value="minio">MinIO</option>
+              <option value="custom">직접 입력</option>
+            </select>
+            <label>Endpoint</label>
+            <input value={cfg.s3_endpoint} placeholder="비우면 AWS (https://s3.<리전>.amazonaws.com)" onChange={(e) => set("s3_endpoint", e.target.value)} />
+            <label>Region</label>
+            <input value={cfg.s3_region} placeholder="예: ap-northeast-2" onChange={(e) => set("s3_region", e.target.value)} />
+            <label>Access Key</label>
+            <input value={cfg.user} onChange={(e) => set("user", e.target.value)} />
+            {passwordRow}
+            <label>버킷</label>
+            <input value={cfg.s3_bucket} placeholder="비우면 버킷 목록 (선택)" onChange={(e) => set("s3_bucket", e.target.value)} />
+            <label>접두어</label>
+            <input value={cfg.s3_prefix} placeholder="(선택) 예: backups/2024" onChange={(e) => set("s3_prefix", e.target.value)} />
+            <label>주소 방식</label>
+            <label className="row">
+              <input type="checkbox" checked={cfg.s3_path_style} onChange={(e) => set("s3_path_style", e.target.checked)} />
+              <span className="hint">path-style (MinIO·R2 등 대부분의 호환 서버)</span>
+            </label>
+            {cfg.s3_endpoint.trim().startsWith("http://") && !/^(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(endpointHost(cfg.s3_endpoint)) && (
+              <div className="full hint" style={{ color: "var(--danger)" }}>
+                http 로 접속하면 키와 데이터가 평문으로 전송됩니다.
+              </div>
+            )}
+          </>
+        )}
+
+        {remote && !isS3 && (
           <>
             {hostRow}
             <label>사용자</label>

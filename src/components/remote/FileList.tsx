@@ -138,6 +138,35 @@ export function FileList(props: Props) {
     props.onChanged([path, ...targets.filter((t) => t.dir).map((t) => join(path, t.name))]);
   };
 
+  const presign = async (r: RemoteEntry) => {
+    const v = await promptDialog({
+      title: "사전서명 URL 복사",
+      fields: [
+        {
+          label: "만료",
+          value: "3600",
+          options: [
+            { value: "3600", label: "1시간" },
+            { value: "86400", label: "1일" },
+            { value: "604800", label: "7일" },
+          ],
+        },
+      ],
+      okLabel: "복사",
+      hint: "URL 을 가진 누구나 만료 전까지 이 파일을 내려받을 수 있습니다.",
+    });
+    if (!v) return;
+    const secs = Number(v[0]);
+    try {
+      const url = await api.remotePresign(cfg.id, join(path, r.name), secs);
+      await navigator.clipboard.writeText(url);
+      const until = new Date(Date.now() + secs * 1000).toLocaleString();
+      toast(`사전서명 URL 을 복사했습니다 (만료: ${until})`);
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    }
+  };
+
   const menu = (e: React.MouseEvent, r: RemoteEntry | null) => {
     let targets = selected;
     if (r && !sel.has(r.name)) {
@@ -153,6 +182,7 @@ export function FileList(props: Props) {
       items.push({ label: "다운로드…", onClick: () => props.onDownload(targets), disabled: !targets.length });
       items.push({ label: "이름 변경…", onClick: () => void rename(r), disabled: ro || targets.length !== 1 });
       items.push({ label: "삭제…", onClick: () => void remove(targets), disabled: ro });
+      if (cfg.driver === "s3" && !r.dir) items.push("sep", { label: "사전서명 URL 복사…", onClick: () => void presign(r), disabled: targets.length !== 1 });
     }
     items.push("sep", { label: "새로고침", onClick: props.onRefresh });
     showContextMenu(e, items);
