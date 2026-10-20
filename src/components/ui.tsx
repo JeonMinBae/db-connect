@@ -60,6 +60,8 @@ export interface MenuItem {
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  /** 켜고 끄는 항목. 값이 있으면 체크 자리를 잡아 켜고 꺼도 글자가 밀리지 않는다 */
+  checked?: boolean;
 }
 export type MenuEntry = MenuItem | "sep";
 
@@ -113,6 +115,7 @@ export function ContextMenuHost() {
               it.onClick();
             }}
           >
+            {it.checked !== undefined && <span className="check">{it.checked ? "✓" : ""}</span>}
             {it.label}
           </div>
         ),

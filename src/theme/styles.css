@@ -462,6 +462,10 @@ body.conn-dragging {
 .ctx-menu .item:hover {
   background: var(--sel);
 }
+.ctx-menu .item .check {
+  display: inline-block;
+  width: 1.2em;
+}
 .ctx-menu .item.disabled {
   opacity: 0.45;
   pointer-events: none;

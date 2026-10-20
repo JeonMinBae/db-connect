@@ -9,7 +9,8 @@ import { confirmLeave, useConnections } from "../store/connections";
 import { searchOpenKeys, useSidebar } from "../store/sidebar";
 import { useTabs } from "../store/tabs";
 import { nodeKey, useTree } from "../store/tree";
-import { confirmDialog } from "../store/ui";
+import { confirmDialog, toast } from "../store/ui";
+import { errorMessage } from "../api";
 import { DbLogo } from "./dbLogos";
 import { Hl, Row, SubFolder } from "./TreeRow";
 import { blankConfig, ConnectionDialog } from "./dialogs/ConnectionDialog";
@@ -271,6 +272,12 @@ function ConnectionNode({ cfg, onEdit }: { cfg: ConnectionConfig; onEdit: (cfg: 
         onClick: refresh,
       },
       "sep",
+      {
+        label: "읽기 전용",
+        checked: cfg.read_only,
+        // 연결 중이면 save 가 다시 연결해 반영한다. 비밀번호는 그대로 둔다(null)
+        onClick: () => void useConnections.getState().save({ ...cfg, read_only: !cfg.read_only }, null).catch((e) => toast(errorMessage(e), "error")),
+      },
       ...commonItems,
     ]);
 
