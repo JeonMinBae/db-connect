@@ -274,6 +274,12 @@ fn spawn_keepalive(browse: Arc<Mutex<Option<Session>>>) -> tokio::task::AbortHan
     .abort_handle()
 }
 
+/// 다른 접속이지만 같은 FTP/SFTP 서버·계정이라 같은 경로가 같은 파일인지 (호스트 별칭은 구분하지 못한다).
+/// S3 는 업로드가 완료 시점에 객체를 바꾸므로 읽던 원본이 깨지지 않아 보지 않는다.
+pub fn same_file_space(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
+    a.driver == b.driver && matches!(a.driver, Driver::Ftp | Driver::Sftp) && a.host.eq_ignore_ascii_case(&b.host) && a.port == b.port && a.user == b.user
+}
+
 /// 접속 테스트: 세션을 열고 루트 목록까지 읽어 본다.
 pub async fn test(cfg: &ConnectionConfig, secret: Option<&str>, data_dir: &Path) -> AppResult<String> {
     let mut s = Session::open(cfg, secret, data_dir).await?;

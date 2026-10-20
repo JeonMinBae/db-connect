@@ -21,7 +21,14 @@ pub enum Job {
     /// 같은 접속 안에서의 복사. 로컬 pick 이 없다.
     Copy { paths: Vec<String>, dest_dir: String },
     /// 다른 접속으로 복사. 원본은 transfer_start 의 conn_id, 대상 세션은 run 의 opener 가 연다.
-    CrossCopy { paths: Vec<String>, dest_conn_id: String, dest_dir: String },
+    CrossCopy {
+        paths: Vec<String>,
+        dest_conn_id: String,
+        dest_dir: String,
+        /// 두 접속이 같은 파일 공간인지 (transfer_start 가 설정, 웹뷰는 보내지 않는다)
+        #[serde(skip)]
+        same_space: bool,
+    },
 }
 
 impl Job {
@@ -179,10 +186,10 @@ pub type Opener = Box<dyn FnOnce() -> BoxFuture<'static, AppResult<Session>> + S
 pub async fn run(mut s: Session, job: Job, local: Vec<PathBuf>, env: Env, open_second: Option<Opener>) -> AppResult<TransferDone> {
     match job {
         Job::Copy { paths, dest_dir } => copy(Sides::Same { s: &mut s, copier: Copier { second: None, opener: open_second } }, &paths, &path::normalize(&dest_dir), env).await,
-        Job::CrossCopy { paths, dest_dir, .. } => {
+        Job::CrossCopy { paths, dest_dir, same_space, .. } => {
             let open = open_second.ok_or_else(|| AppError::user("대상 접속을 열 수 없습니다."))?;
             let mut dst = open().await?;
-            copy(Sides::Cross { src: &mut s, dst: &mut dst }, &paths, &path::normalize(&dest_dir), env).await
+            copy(Sides::Cross { src: &mut s, dst: &mut dst, same_space },&paths, &path::normalize(&dest_dir), env).await
         }
         Job::Upload { dest_dir, .. } => upload(&mut s, &path::normalize(&dest_dir), &local, env).await,
         Job::Download { paths, .. } => {
@@ -415,7 +422,8 @@ async fn stream_copy(src: &mut Session, dst: &mut Session, from: &str, to: &str,
 /// 복사의 원본·대상. Same 은 한 세션이 둘 다 맡고, Cross 는 접속이 다르다.
 enum Sides<'a> {
     Same { s: &'a mut Session, copier: Copier },
-    Cross { src: &'a mut Session, dst: &'a mut Session },
+    /// same_space: 다른 접속이지만 같은 서버·계정이라 같은 경로가 같은 파일이다
+    Cross { src: &'a mut Session, dst: &'a mut Session, same_space: bool },
 }
 
 impl Sides<'_> {
@@ -436,7 +444,12 @@ impl Sides<'_> {
     async fn file(&mut self, ctx: &mut Ctx, from: &str, to: &str, size: u64, shown: &str) -> AppResult<()> {
         match self {
             Sides::Same { s, copier } => copier.file(ctx, s, from, to, size, shown).await,
-            Sides::Cross { src, dst } => cross_file(ctx, src, dst, from, to, shown).await,
+            // 자기 자신 위로 덮어쓰면 업로드가 원본을 비운 뒤 읽게 되므로 건너뛴다
+            Sides::Cross { same_space: true, .. } if from == to => {
+                ctx.skipped += 1;
+                Ok(())
+            }
+            Sides::Cross { src, dst, .. } => cross_file(ctx, src, dst, from, to, shown).await,
         }
     }
 }
@@ -587,9 +600,21 @@ mod tests {
 
     #[test]
     fn crosscopy_job_from_json() {
-        let j: Job = serde_json::from_str(r#"{"kind":"crosscopy","paths":["/a"],"dest_conn_id":"c2","dest_dir":"/b"}"#).unwrap();
-        assert!(matches!(j, Job::CrossCopy { ref dest_conn_id, .. } if dest_conn_id == "c2"));
+        // same_space 는 웹뷰가 보내도 무시된다 (백엔드가 접속 설정으로 정한다)
+        let j: Job = serde_json::from_str(r#"{"kind":"crosscopy","paths":["/a"],"dest_conn_id":"c2","dest_dir":"/b","same_space":true}"#).unwrap();
+        assert!(matches!(j, Job::CrossCopy { ref dest_conn_id, same_space: false, .. } if dest_conn_id == "c2"));
         assert!(j.pick_id().is_none());
+    }
+
+    #[test]
+    fn same_file_space_rule() {
+        use crate::store::config::{ConnectionConfig, Driver};
+        let sftp = ConnectionConfig { id: "a".into(), driver: Driver::Sftp, host: "Example.com".into(), port: 22, user: "u".into(), ..Default::default() };
+        assert!(super::super::same_file_space(&sftp, &ConnectionConfig { id: "b".into(), host: "example.com".into(), ..sftp.clone() }));
+        assert!(!super::super::same_file_space(&sftp, &ConnectionConfig { user: "other".into(), ..sftp.clone() }));
+        assert!(!super::super::same_file_space(&sftp, &ConnectionConfig { port: 2222, ..sftp.clone() }));
+        let s3 = ConnectionConfig { driver: Driver::S3, ..sftp.clone() };
+        assert!(!super::super::same_file_space(&s3, &s3.clone()));
     }
 
     #[test]

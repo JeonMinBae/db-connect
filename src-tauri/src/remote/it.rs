@@ -454,7 +454,7 @@ async fn cross_scenario(src_cfg: &ConnectionConfig, src_secret: &str, dst_cfg: &
         let (cfg, secret, dd) = (dst_cfg.clone(), dst_secret.to_string(), data_dir.to_path_buf());
         Some(Box::new(move || Box::pin(async move { Session::open(&cfg, Some(&secret), &dd).await })))
     };
-    let job = Job::CrossCopy { paths: vec![format!("{a}/x.txt"), format!("{a}/empty.bin"), format!("{a}/dir")], dest_conn_id: "dst".into(), dest_dir: b.clone() };
+    let job = Job::CrossCopy { paths: vec![format!("{a}/x.txt"), format!("{a}/empty.bin"), format!("{a}/dir")], dest_conn_id: "dst".into(), dest_dir: b.clone(), same_space: false };
     let rename = Answer { choice: Choice::Rename, all: false };
     let done = transfer::run(Session::open(src_cfg, Some(src_secret), data_dir).await.unwrap(), job, vec![], test_env(Some(rename)), opener).await.unwrap();
 
@@ -501,11 +501,30 @@ async fn cross_s3_to_s3_keeps_content_type() {
         let dst = dst.clone();
         Some(Box::new(move || Box::pin(async move { Session::open(&dst, Some("minioadmin"), &tmp()).await })))
     };
-    let job = Job::CrossCopy { paths: vec![format!("/ct-{id}/data")], dest_conn_id: "dst".into(), dest_dir: "/".into() };
+    let job = Job::CrossCopy { paths: vec![format!("/ct-{id}/data")], dest_conn_id: "dst".into(), dest_dir: "/".into(), same_space: false };
     transfer::run(Session::open(&src, Some("minioadmin"), &tmp()).await.unwrap(), job, vec![], test_env(None), opener).await.unwrap();
     let mut d = Session::open(&dst, Some("minioadmin"), &tmp()).await.unwrap();
     assert_eq!(d.content_type("/data").await.unwrap().as_deref(), Some("text/csv; charset=utf-8"));
     d.remove_file("/data").await.unwrap();
     ops::delete_tree(&mut s, &format!("/ct-{id}")).await.unwrap();
     cross_scenario(&src, "minioadmin", &dst, "minioadmin", &tmp(), format!("/it-{id}"), format!("/it-{id}")).await;
+}
+
+/// 같은 SFTP 서버·계정을 다른 접속으로 등록해 자기 자신 위로 덮어쓰기를 골라도 원본이 보존된다
+#[tokio::test]
+#[ignore]
+async fn cross_same_space_overwrite_self_skips() {
+    let (mut s, dir) = trusted_sftp().await;
+    let base = format!("/upload/it-{}", uuid::Uuid::new_v4());
+    let big: Vec<u8> = (0..=255u8).cycle().take(300_000).collect();
+    s.mkdir(&base).await.unwrap();
+    s.write_all(&format!("{base}/a.txt"), &big).await.unwrap();
+    let (cfg, dd) = (sftp_cfg(), dir.path().to_path_buf());
+    let opener: Option<transfer::Opener> = Some(Box::new(move || Box::pin(async move { Session::open(&cfg, Some("test"), &dd).await })));
+    let job = Job::CrossCopy { paths: vec![format!("{base}/a.txt")], dest_conn_id: "dst".into(), dest_dir: base.clone(), same_space: true };
+    let overwrite = Answer { choice: Choice::Overwrite, all: false };
+    let done = transfer::run(Session::open(&sftp_cfg(), Some("test"), dir.path()).await.unwrap(), job, vec![], test_env(Some(overwrite)), opener).await.unwrap();
+    assert_eq!((done.files, done.skipped), (0, 1));
+    assert_eq!(s.read_all(&format!("{base}/a.txt"), 1 << 20).await.unwrap(), big);
+    ops::delete_tree(&mut s, &base).await.unwrap();
 }
