@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    db_connect_lib::run()
+    data_connector_lib::run()
 }

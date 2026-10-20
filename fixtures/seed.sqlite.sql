@@ -1,4 +1,4 @@
--- db-connect 테스트용 SQLite 시드
+-- data-connector 테스트용 SQLite 시드
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS no_pk;
 DROP TABLE IF EXISTS order_items;

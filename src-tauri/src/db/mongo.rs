@@ -71,7 +71,7 @@ async fn options(cfg: &ConnectionConfig, pw: Option<&str>) -> AppResult<ClientOp
         return Err(AppError::user("연결 문자열(URI)이 비어 있습니다"));
     }
     let mut o = ClientOptions::parse(cfg.mongo_uri.trim()).await?;
-    o.app_name = Some("db-connect".into());
+    o.app_name = Some("data-connector".into());
     o.connect_timeout.get_or_insert(Duration::from_secs(10));
     o.server_selection_timeout.get_or_insert(Duration::from_secs(10));
     if let Some(pw) = pw.filter(|p| !p.is_empty()) {
