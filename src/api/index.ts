@@ -45,7 +45,8 @@ export type Pick = { pick_id: string; names: string[] };
 export type TransferJob =
   | { kind: "upload"; pick_id: string; dest_dir: string }
   | { kind: "download"; paths: string[]; pick_id: string }
-  | { kind: "copy"; paths: string[]; dest_dir: string };
+  | { kind: "copy"; paths: string[]; dest_dir: string }
+  | { kind: "crosscopy"; paths: string[]; dest_conn_id: string; dest_dir: string };
 export type TransferAnswer = { choice: "overwrite" | "skip" | "rename"; all: boolean };
 export type TransferProgress = { job_id: string; file: string; done_bytes: number; total_bytes: number; done_files: number; total_files: number };
 export type TransferConflict = { job_id: string; ask_id: string; path: string; dir: boolean };

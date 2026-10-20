@@ -1,4 +1,4 @@
-import type { RemoteEntry } from "../api/types";
+import { isRemote, type ConnectionConfig, type RemoteEntry } from "../api/types";
 import { parent } from "./path";
 
 export type SortKey = "name" | "size" | "mtime" | "perm";
@@ -87,5 +87,15 @@ export const parseMode = (s: string): number | null => (/^[0-7]{3,4}$/.test(s.tr
 
 /** dest 가 src 자신이거나 그 하위인지 (폴더를 자기 안으로 옮기지 못하게) */
 
-/** 탭 안에서만 쓰는 잘라내기/복사 보관함. 접속이 다르면 붙여넣을 수 없다 */
+/** 앱 전체 하나뿐인 잘라내기/복사 보관함 (clipboard.ts). 접속이 다르면 복사로만 붙여넣는다 */
 export type Clip = { mode: "cut" | "copy"; connId: string; paths: string[] };
+
+/** 같은 접속이면 기존 복사/이동, 다른 접속이면 잘라내기여도 접속 간 복사 */
+export const pasteKind = (clip: Clip, connId: string): "copy" | "move" | "cross" => (clip.connId !== connId ? "cross" : clip.mode === "cut" ? "move" : "copy");
+
+/** 접속 간 복사 대상 후보: 원격 접속만, 원본 자신은 빼고, 읽기 전용은 고를 수 없게 표시 */
+export function crossTargets(configs: ConnectionConfig[], srcId: string): { cfg: ConnectionConfig; disabled: boolean }[] {
+  return configs.filter((c) => isRemote(c.driver) && c.id !== srcId).map((cfg) => ({ cfg, disabled: cfg.read_only }));
+}
+
+export const pathsLabel = (paths: string[]): string => (paths.length === 1 ? (paths[0].split("/").pop() ?? paths[0]) : `${paths.length}개 항목`);

@@ -4,9 +4,12 @@ vi.mock("../api", () => ({
   api: { pickRelease: vi.fn(() => Promise.resolve()), cancelQuery: vi.fn(() => Promise.resolve(true)), transferStart: vi.fn(), transferAnswer: vi.fn() },
   errorMessage: (e: unknown) => String(e),
 }));
+vi.mock("../store/ui", () => ({ toast: vi.fn() }));
+vi.mock("../store/connections", () => ({ useConnections: { getState: () => ({ configs: [{ id: "c2", name: "R2 prod" }] }) } }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
 import { api } from "../api";
+import { toast } from "../store/ui";
 import { nextToStart, useTransfers, type TransferItem } from "./transfers";
 
 const item = (id: string, tabId: string, status: TransferItem["status"]) => ({ id, tabId, status }) as TransferItem;
@@ -65,5 +68,28 @@ describe("큐", () => {
     rej("사용자가 중지했습니다.");
     await new Promise((r) => setTimeout(r, 0));
     expect(useTransfers.getState().items[0].status).toBe("canceled");
+  });
+});
+
+describe("crosscopy 실패", () => {
+  it("토스트에 대상 접속 이름과 백엔드 오류(부분 파일 경로 포함)를 보여 준다", async () => {
+    vi.mocked(api.transferStart).mockRejectedValueOnce("끊김 (대상에 쓰다 만 파일이 남았을 수 있습니다: /b/x.bin)");
+    useTransfers.setState({ items: [] });
+    useTransfers.getState().enqueue("t", "c1", "⇄ x", { kind: "crosscopy", paths: ["/a/x.bin"], dest_conn_id: "c2", dest_dir: "/b" });
+    await vi.waitFor(() => expect(useTransfers.getState().items[0].status).toBe("failed"));
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("R2 prod"), "error");
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("/b/x.bin"), "error");
+  });
+
+  it("사용자가 중지하면 토스트를 띄우지 않는다", async () => {
+    vi.mocked(toast).mockClear();
+    let reject!: (e: unknown) => void;
+    vi.mocked(api.transferStart).mockReturnValueOnce(new Promise((_, r) => (reject = r)));
+    useTransfers.setState({ items: [] });
+    useTransfers.getState().enqueue("t", "c1", "⇄ x", { kind: "crosscopy", paths: ["/a"], dest_conn_id: "c2", dest_dir: "/b" });
+    useTransfers.getState().cancel(useTransfers.getState().items[0].id);
+    reject("사용자가 중지했습니다.");
+    await vi.waitFor(() => expect(useTransfers.getState().items[0].status).toBe("canceled"));
+    expect(toast).not.toHaveBeenCalled();
   });
 });
