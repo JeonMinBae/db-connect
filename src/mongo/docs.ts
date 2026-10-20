@@ -1,5 +1,6 @@
 import type { Cell, ColumnInfo, ColumnMeta } from "../api/types";
 import type { PendingChanges } from "../grid/pending";
+import { parseNumber, type NumberOf } from "../grid/selStats";
 import type { EditInfo } from "../sql/editable";
 import type { MongoOp } from "./console";
 import { bsonType, formatShell, parseShellValue, ShellError, type EJson } from "./shell";
@@ -30,6 +31,13 @@ export const columnInfosOf = (cols: string[], docs: EJson[]): ColumnInfo[] =>
     const t = first ? bsonType(first[name]) : "missing";
     return { name, type_name: ["numberInt", "numberLong", "numberDouble", "numberDecimal"].includes(t) ? "numeric" : t };
   });
+
+// mongosh 표기의 64비트·Decimal128 숫자: NumberLong("12"), NumberDecimal("1.5")
+const WRAPPED_NUM = /^Number(?:Long|Decimal)\("(.*)"\)$/;
+
+/** 컬럼 타입은 첫 문서 기준이라 칸 값으로 판정한다. 없는 필드·필드 삭제 칸은 NULL처럼 뺀다 */
+export const mongoNumberOf: NumberOf = (c) =>
+  c.t === "Null" || c.t === "Unsupported" ? undefined : c.t === "Text" ? parseNumber(WRAPPED_NUM.exec(c.v)?.[1] ?? c.v) : null;
 
 export function cellOfValue(v: EJson | undefined): Cell {
   if (v === undefined) return MISSING;

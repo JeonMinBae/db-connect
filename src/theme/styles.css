@@ -367,6 +367,17 @@ body.conn-dragging {
 .statusbar .spacer {
   flex: 1;
 }
+.status-cells {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.status-cells > * + * {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
 .running {
   display: flex;
   align-items: center;
@@ -450,6 +461,10 @@ body.conn-dragging {
 }
 .ctx-menu .item:hover {
   background: var(--sel);
+}
+.ctx-menu .item .check {
+  display: inline-block;
+  width: 1.2em;
 }
 .ctx-menu .item.disabled {
   opacity: 0.45;

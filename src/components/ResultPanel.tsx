@@ -7,7 +7,9 @@ import { showContextMenu } from "./ui";
 import { useTabs } from "../store/tabs";
 import { confirmDialog, toast } from "../store/ui";
 import type { Scheme } from "../theme";
+import type { SelStats } from "../grid/selStats";
 import { EditableResult, type ResultCtx } from "./EditableResult";
+import { StatusCells } from "./StatusCells";
 
 type Runner = ReturnType<typeof useRunner>;
 
@@ -86,7 +88,7 @@ function PageSizePicker({ entry, runner, guard, children }: { entry: ResultEntry
 }
 
 /** 페이지 이동과 행 수 조회 바. guard가 false를 돌려주면 이동하지 않는다. */
-export function PagingBar({ entry, runner, guard, children }: { entry: ResultEntry; runner: Runner; guard?: () => Promise<boolean>; children?: ReactNode }) {
+export function PagingBar({ entry, runner, guard, stats, children }: { entry: ResultEntry; runner: Runner; guard?: () => Promise<boolean>; stats: SelStats | null; children?: ReactNode }) {
   const r = entry.result;
   if (!r) return null;
   const from = r.rows.length ? entry.offset + 1 : 0;
@@ -100,7 +102,9 @@ export function PagingBar({ entry, runner, guard, children }: { entry: ResultEnt
   };
   return (
     <div className="statusbar">
-      {children}
+      <StatusCells ms={r.elapsed_ms} msTitle="페치 시간: DB 실행 + 행 수신" stats={stats}>
+        {children}
+      </StatusCells>
       <span className="spacer" />
       {entry.stmt.pageable ? (
         <>
@@ -122,7 +126,6 @@ export function PagingBar({ entry, runner, guard, children }: { entry: ResultEnt
           {r.rows.length}행{r.has_more ? ` (처음 ${size}행만 표시)` : ""}
         </PageSizePicker>
       )}
-      <span>{r.elapsed_ms} ms</span>
     </div>
   );
 }
