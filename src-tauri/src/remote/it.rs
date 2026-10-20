@@ -434,3 +434,78 @@ async fn s3_upload_typed() {
     assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 4);
     ops::delete_tree(&mut s, &base).await.unwrap();
 }
+
+/// 접속 간 복사 공통: 파일·0바이트·폴더(빈 폴더 포함), 대상 충돌 → Rename, 원본 불변
+async fn cross_scenario(src_cfg: &ConnectionConfig, src_secret: &str, dst_cfg: &ConnectionConfig, dst_secret: &str, data_dir: &std::path::Path, a: String, b: String) {
+    let mut s = Session::open(src_cfg, Some(src_secret), data_dir).await.unwrap();
+    let mut d = Session::open(dst_cfg, Some(dst_secret), data_dir).await.unwrap();
+    let big: Vec<u8> = (0..=255u8).cycle().take(300_000).collect();
+    let json = "{\"한\":1}".as_bytes(); // 9바이트 (한 = 3바이트)
+    s.mkdir(&a).await.unwrap();
+    s.mkdir(&format!("{a}/dir")).await.unwrap();
+    s.mkdir(&format!("{a}/dir/빈")).await.unwrap();
+    s.write_all(&format!("{a}/x.txt"), &big).await.unwrap();
+    s.write_all(&format!("{a}/empty.bin"), b"").await.unwrap();
+    s.write_all(&format!("{a}/dir/sub y.json"), json).await.unwrap();
+    d.mkdir(&b).await.unwrap();
+    d.write_all(&format!("{b}/x.txt"), b"old").await.unwrap();
+
+    let opener: Option<transfer::Opener> = {
+        let (cfg, secret, dd) = (dst_cfg.clone(), dst_secret.to_string(), data_dir.to_path_buf());
+        Some(Box::new(move || Box::pin(async move { Session::open(&cfg, Some(&secret), &dd).await })))
+    };
+    let job = Job::CrossCopy { paths: vec![format!("{a}/x.txt"), format!("{a}/empty.bin"), format!("{a}/dir")], dest_conn_id: "dst".into(), dest_dir: b.clone() };
+    let rename = Answer { choice: Choice::Rename, all: false };
+    let done = transfer::run(Session::open(src_cfg, Some(src_secret), data_dir).await.unwrap(), job, vec![], test_env(Some(rename)), opener).await.unwrap();
+
+    assert_eq!(done, TransferDone { files: 3, bytes: big.len() as u64 + json.len() as u64, skipped: 0 });
+    assert_eq!(d.read_all(&format!("{b}/x (1).txt"), 1 << 20).await.unwrap(), big);
+    assert_eq!(d.read_all(&format!("{b}/x.txt"), 10).await.unwrap(), b"old");
+    assert_eq!(d.stat(&format!("{b}/empty.bin")).await.unwrap().map(|(e, _)| (e.dir, e.size)), Some((false, 0)));
+    assert_eq!(d.read_all(&format!("{b}/dir/sub y.json"), 100).await.unwrap(), json);
+    assert!(d.stat(&format!("{b}/dir/빈")).await.unwrap().is_some_and(|(e, _)| e.dir));
+    assert_eq!(s.read_all(&format!("{a}/x.txt"), 1 << 20).await.unwrap(), big); // 원본 유지
+    if matches!(d, Session::S3(_)) && !matches!(s, Session::S3(_)) {
+        assert_eq!(d.content_type(&format!("{b}/dir/sub y.json")).await.unwrap().as_deref(), Some("application/json"));
+    }
+    ops::delete_tree(&mut s, &a).await.unwrap();
+    ops::delete_tree(&mut d, &b).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore]
+async fn cross_sftp_to_s3() {
+    let (_s, dir) = trusted_sftp().await; // known_hosts 를 dir 에 기록
+    let id = uuid::Uuid::new_v4();
+    cross_scenario(&sftp_cfg(), "test", &s3_cfg("it-bucket"), "minioadmin", dir.path(), format!("/upload/it-{id}"), format!("/it-{id}")).await;
+}
+
+#[tokio::test]
+#[ignore]
+async fn cross_s3_to_ftp() {
+    let _g = FTP_LOCK.lock().await;
+    let id = uuid::Uuid::new_v4();
+    cross_scenario(&s3_cfg("it-bucket"), "minioadmin", &ftp_cfg(), "test", &tmp(), format!("/it-{id}"), format!("/it-{id}")).await;
+}
+
+/// 다른 S3 접속(버킷 고정) 사이: 원본 Content-Type 을 그대로 가져간다
+#[tokio::test]
+#[ignore]
+async fn cross_s3_to_s3_keeps_content_type() {
+    let id = uuid::Uuid::new_v4();
+    let (src, dst) = (s3_cfg("it-bucket"), s3_cfg("it-bucket2"));
+    let mut s = Session::open(&src, Some("minioadmin"), &tmp()).await.unwrap();
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    s.upload_typed(&format!("/ct-{id}/data"), &b"a,b\n"[..], counter, "text/csv; charset=utf-8").await.unwrap();
+    let opener: Option<transfer::Opener> = {
+        let dst = dst.clone();
+        Some(Box::new(move || Box::pin(async move { Session::open(&dst, Some("minioadmin"), &tmp()).await })))
+    };
+    let job = Job::CrossCopy { paths: vec![format!("/ct-{id}/data")], dest_conn_id: "dst".into(), dest_dir: "/".into() };
+    transfer::run(Session::open(&src, Some("minioadmin"), &tmp()).await.unwrap(), job, vec![], test_env(None), opener).await.unwrap();
+    let mut d = Session::open(&dst, Some("minioadmin"), &tmp()).await.unwrap();
+    assert_eq!(d.content_type("/data").await.unwrap().as_deref(), Some("text/csv; charset=utf-8"));
+    d.remove_file("/data").await.unwrap();
+    ops::delete_tree(&mut s, &format!("/ct-{id}")).await.unwrap();
+    cross_scenario(&src, "minioadmin", &dst, "minioadmin", &tmp(), format!("/it-{id}"), format!("/it-{id}")).await;
+}
