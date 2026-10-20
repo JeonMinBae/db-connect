@@ -150,8 +150,19 @@ struct Conflict<'a> {
 
 /// 업로드·다운로드 실행. 중지는 `cancel_query(job_id)`.
 #[tauri::command]
-pub async fn transfer_start(app: AppHandle, state: State<'_, AppState>, conn_id: String, job_id: String, job: Job) -> AppResult<TransferDone> {
+pub async fn transfer_start(app: AppHandle, state: State<'_, AppState>, conn_id: String, job_id: String, mut job: Job) -> AppResult<TransferDone> {
     let r = state.remote(&conn_id).await?;
+    // 접속 간 복사는 대상에만 쓴다 (원본은 읽기 전용이어도 된다)
+    let dst = match &mut job {
+        Job::CrossCopy { dest_conn_id, .. } if *dest_conn_id == conn_id => return Err(AppError::user("같은 접속으로는 접속 간 복사를 할 수 없습니다")),
+        Job::CrossCopy { dest_conn_id, same_space, .. } => {
+            let d = state.remote(dest_conn_id).await?;
+            d.check_write()?;
+            *same_space = crate::remote::same_file_space(&r.cfg, &d.cfg);
+            Some(d)
+        }
+        _ => None,
+    };
     // 같은 접속 안 복사도 쓰기다
     if matches!(job, Job::Upload { .. } | Job::Copy { .. }) {
         r.check_write()?;
@@ -182,11 +193,11 @@ pub async fn transfer_start(app: AppHandle, state: State<'_, AppState>, conn_id:
         })
     };
     let env = Env { job_id: job_id.clone(), emit, ask };
-    let r2 = r.clone();
+    let second_conn = dst.unwrap_or_else(|| r.clone());
     state
         .abortable(&job_id, async move {
             let s = r.session().await?;
-            let second: transfer::Opener = Box::new(move || Box::pin(async move { r2.session().await }));
+            let second: transfer::Opener = Box::new(move || Box::pin(async move { second_conn.session().await }));
             transfer::run(s, job, local, env, Some(second)).await
         })
         .await

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { dragNames, History, mtimeText, parseMode, permText, sizeText, sortEntries, visibleEntries } from "./browser";
+import type { ConnectionConfig } from "../api/types";
+import { crossTargets, dragNames, History, mtimeText, parseMode, pasteKind, pathsLabel, permText, sizeText, sortEntries, visibleEntries } from "./browser";
 
 const e = (name: string, dir = false, size = 0, mtime: number | null = null) => ({ name, dir, size, mtime, perm: null });
 
@@ -71,5 +72,29 @@ describe("parseMode", () => {
     expect(parseMode("8")).toBeNull();
     expect(parseMode("rwx")).toBeNull();
     expect(parseMode("77777")).toBeNull();
+  });
+});
+
+describe("pasteKind", () => {
+  it("같은 접속은 기존대로, 다른 접속은 잘라내기도 복사(cross)", () => {
+    expect(pasteKind({ mode: "copy", connId: "a", paths: [] }, "a")).toBe("copy");
+    expect(pasteKind({ mode: "cut", connId: "a", paths: [] }, "a")).toBe("move");
+    expect(pasteKind({ mode: "copy", connId: "a", paths: [] }, "b")).toBe("cross");
+    expect(pasteKind({ mode: "cut", connId: "a", paths: [] }, "b")).toBe("cross");
+  });
+});
+
+describe("crossTargets", () => {
+  const c = (id: string, driver: ConnectionConfig["driver"], read_only = false) => ({ id, driver, read_only, name: id }) as ConnectionConfig;
+  it("원격 접속만, 원본 제외, 읽기 전용은 disabled", () => {
+    const r = crossTargets([c("src", "s3"), c("r2", "s3"), c("ro", "sftp", true), c("pg", "postgres"), c("f", "ftp")], "src");
+    expect(r.map((t) => [t.cfg.id, t.disabled])).toEqual([["r2", false], ["ro", true], ["f", false]]);
+  });
+});
+
+describe("pathsLabel", () => {
+  it("하나면 이름, 여러 개면 개수", () => {
+    expect(pathsLabel(["/a/b.txt"])).toBe("b.txt");
+    expect(pathsLabel(["/a", "/b"])).toBe("2개 항목");
   });
 });

@@ -167,6 +167,22 @@ impl Session {
         }
     }
 
+    /// S3 객체의 Content-Type. S3 가 아니면 None.
+    pub async fn content_type(&mut self, path: &str) -> AppResult<Option<String>> {
+        match self {
+            Self::S3(s) => s.content_type(path).await,
+            _ => Ok(None),
+        }
+    }
+
+    /// 접속 간 복사용 업로드. S3 만 content_type 을 쓰고 나머지는 upload 와 같다.
+    pub async fn upload_typed(&mut self, path: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>, content_type: &str) -> AppResult<()> {
+        match self {
+            Self::S3(s) => s.upload_typed(path, reader, counter, content_type).await,
+            _ => self.upload(path, reader, counter).await,
+        }
+    }
+
     /// S3 전용: 사전서명 GET URL
     pub async fn presign(&mut self, path: &str, expires_secs: u32) -> AppResult<String> {
         match self {
@@ -256,6 +272,12 @@ fn spawn_keepalive(browse: Arc<Mutex<Option<Session>>>) -> tokio::task::AbortHan
         }
     })
     .abort_handle()
+}
+
+/// 다른 접속이지만 같은 FTP/SFTP 서버·계정이라 같은 경로가 같은 파일인지 (호스트 별칭은 구분하지 못한다).
+/// S3 는 업로드가 완료 시점에 객체를 바꾸므로 읽던 원본이 깨지지 않아 보지 않는다.
+pub fn same_file_space(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
+    a.driver == b.driver && matches!(a.driver, Driver::Ftp | Driver::Sftp) && a.host.eq_ignore_ascii_case(&b.host) && a.port == b.port && a.user == b.user
 }
 
 /// 접속 테스트: 세션을 열고 루트 목록까지 읽어 본다.

@@ -20,13 +20,22 @@ pub enum Job {
     Download { paths: Vec<String>, pick_id: String },
     /// 같은 접속 안에서의 복사. 로컬 pick 이 없다.
     Copy { paths: Vec<String>, dest_dir: String },
+    /// 다른 접속으로 복사. 원본은 transfer_start 의 conn_id, 대상 세션은 run 의 opener 가 연다.
+    CrossCopy {
+        paths: Vec<String>,
+        dest_conn_id: String,
+        dest_dir: String,
+        /// 두 접속이 같은 파일 공간인지 (transfer_start 가 설정, 웹뷰는 보내지 않는다)
+        #[serde(skip)]
+        same_space: bool,
+    },
 }
 
 impl Job {
     pub fn pick_id(&self) -> Option<&str> {
         match self {
             Job::Upload { pick_id, .. } | Job::Download { pick_id, .. } => Some(pick_id),
-            Job::Copy { .. } => None,
+            Job::Copy { .. } | Job::CrossCopy { .. } => None,
         }
     }
 }
@@ -170,13 +179,18 @@ async fn resolve_conflict(ctx: &mut Ctx, dir_has: impl Fn(&str) -> bool, name: &
     })
 }
 
-/// Copy 에서 FTP/SFTP 가 쓸 두 번째 세션을 여는 함수 (필요할 때만 한 번 호출)
+/// Copy 에서는 FTP/SFTP 스트리밍용 두 번째 세션, CrossCopy 에서는 대상 접속 세션을 여는 함수 (필요할 때만 한 번 호출)
 pub type Opener = Box<dyn FnOnce() -> BoxFuture<'static, AppResult<Session>> + Send>;
 
 /// `local` 은 job 의 pick_id 를 풀어 낸 로컬 경로들
 pub async fn run(mut s: Session, job: Job, local: Vec<PathBuf>, env: Env, open_second: Option<Opener>) -> AppResult<TransferDone> {
     match job {
-        Job::Copy { paths, dest_dir } => copy(&mut s, &paths, &path::normalize(&dest_dir), env, open_second).await,
+        Job::Copy { paths, dest_dir } => copy(Sides::Same { s: &mut s, copier: Copier { second: None, opener: open_second } }, &paths, &path::normalize(&dest_dir), env).await,
+        Job::CrossCopy { paths, dest_dir, same_space, .. } => {
+            let open = open_second.ok_or_else(|| AppError::user("대상 접속을 열 수 없습니다."))?;
+            let mut dst = open().await?;
+            copy(Sides::Cross { src: &mut s, dst: &mut dst, same_space },&paths, &path::normalize(&dest_dir), env).await
+        }
         Job::Upload { dest_dir, .. } => upload(&mut s, &path::normalize(&dest_dir), &local, env).await,
         Job::Download { paths, .. } => {
             let target = local.into_iter().next().ok_or_else(|| AppError::user("저장 위치가 없습니다."))?;
@@ -387,15 +401,72 @@ async fn download(s: &mut Session, paths: &[String], target: &Path, env: Env) ->
 }
 
 /// FTP/SFTP 는 서버 복사 명령이 없어 세션 두 개로 내려받는 즉시 올린다 (임시 파일 없음)
-async fn stream_copy(src: &mut Session, dst: &mut Session, from: &str, to: &str, counter: Arc<AtomicU64>) -> AppResult<()> {
+/// `ct` 는 대상이 S3 일 때만 쓴다.
+async fn stream_copy(src: &mut Session, dst: &mut Session, from: &str, to: &str, counter: Arc<AtomicU64>, ct: Option<&str>) -> AppResult<()> {
     let (mut w, r) = tokio::io::duplex(256 * 1024);
     let down = async {
         src.download(from, &mut w, Arc::new(AtomicU64::new(0))).await?;
         w.shutdown().await.map_err(|e| AppError::Remote(e.to_string()))?; // EOF 를 알려야 업로드가 끝난다
         AppResult::Ok(())
     };
-    let up = dst.upload(to, r, counter);
+    let up = async {
+        match ct {
+            Some(c) => dst.upload_typed(to, r, counter, c).await,
+            None => dst.upload(to, r, counter).await,
+        }
+    };
     tokio::try_join!(down, up)?;
+    Ok(())
+}
+
+/// 복사의 원본·대상. Same 은 한 세션이 둘 다 맡고, Cross 는 접속이 다르다.
+enum Sides<'a> {
+    Same { s: &'a mut Session, copier: Copier },
+    /// same_space: 다른 접속이지만 같은 서버·계정이라 같은 경로가 같은 파일이다
+    Cross { src: &'a mut Session, dst: &'a mut Session, same_space: bool },
+}
+
+impl Sides<'_> {
+    fn src(&mut self) -> &mut Session {
+        match self {
+            Sides::Same { s, .. } => s,
+            Sides::Cross { src, .. } => src,
+        }
+    }
+
+    fn dst(&mut self) -> &mut Session {
+        match self {
+            Sides::Same { s, .. } => s,
+            Sides::Cross { dst, .. } => dst,
+        }
+    }
+
+    async fn file(&mut self, ctx: &mut Ctx, from: &str, to: &str, size: u64, shown: &str) -> AppResult<()> {
+        match self {
+            Sides::Same { s, copier } => copier.file(ctx, s, from, to, size, shown).await,
+            // 자기 자신 위로 덮어쓰면 업로드가 원본을 비운 뒤 읽게 되므로 건너뛴다
+            Sides::Cross { same_space: true, .. } if from == to => {
+                ctx.skipped += 1;
+                Ok(())
+            }
+            Sides::Cross { src, dst, .. } => cross_file(ctx, src, dst, from, to, shown).await,
+        }
+    }
+}
+
+/// 대상 S3 객체의 Content-Type: 원본 S3 값이 있으면 그대로, 없으면 원본 확장자로 추정
+fn copy_content_type(src_ct: Option<String>, from: &str) -> String {
+    src_ct.unwrap_or_else(|| mime_guess::from_path(from).first_or_octet_stream().to_string())
+}
+
+/// 부분 파일은 지우지 않는다(요구사항). 대신 어디에 남았을 수 있는지 오류에 붙인다.
+async fn cross_file(ctx: &mut Ctx, src: &mut Session, dst: &mut Session, from: &str, to: &str, shown: &str) -> AppResult<()> {
+    ctx.begin(shown);
+    let ct = if matches!(dst, Session::S3(_)) { Some(copy_content_type(src.content_type(from).await?, from)) } else { None };
+    stream_copy(src, dst, from, to, ctx.counter(), ct.as_deref())
+        .await
+        .map_err(|e| AppError::user(format!("{e} (대상에 쓰다 만 파일이 남았을 수 있습니다: {to})")))?;
+    ctx.file_done();
     Ok(())
 }
 
@@ -420,7 +491,7 @@ impl Copier {
                 let open = self.opener.take().ok_or_else(|| AppError::user("복사용 두 번째 접속을 열 수 없습니다."))?;
                 self.second = Some(open().await?);
             }
-            stream_copy(s, self.second.as_mut().unwrap(), from, to, ctx.counter()).await?;
+            stream_copy(s, self.second.as_mut().unwrap(), from, to, ctx.counter(), None).await?;
         }
         ctx.file_done();
         Ok(())
@@ -440,29 +511,30 @@ async fn ensure_dir(s: &mut Session, cache: &mut HashMap<String, HashSet<String>
     }
 }
 
-async fn copy(s: &mut Session, paths: &[String], dest: &str, env: Env, open_second: Option<Opener>) -> AppResult<TransferDone> {
+async fn copy(mut sides: Sides<'_>, paths: &[String], dest: &str, env: Env) -> AppResult<TransferDone> {
+    let same = matches!(sides, Sides::Same { .. });
     let mut tops = Vec::new();
     for p in paths {
         let p = path::normalize(p);
         if p == "/" {
             return Err(AppError::user("루트는 복사할 수 없습니다"));
         }
-        let (e, _) = s.stat(&p).await?.ok_or_else(|| AppError::user(format!("원격 경로가 없습니다: {p}")))?;
-        if e.dir && path::is_inside(dest, &p) {
+        let (e, _) = sides.src().stat(&p).await?.ok_or_else(|| AppError::user(format!("원격 경로가 없습니다: {p}")))?;
+        // 접속이 다르면 경로 공간이 달라 겹치지 않는다
+        if same && e.dir && path::is_inside(dest, &p) {
             return Err(AppError::user(format!("폴더를 자기 자신 안으로 복사할 수 없습니다: {p}")));
         }
-        let kids = if e.dir { ops::walk(s, &p).await? } else { Vec::new() };
+        let kids = if e.dir { ops::walk(sides.src(), &p).await? } else { Vec::new() };
         tops.push((p, e, kids));
     }
     let files = || tops.iter().flat_map(|(_, e, k)| std::iter::once(e).chain(k.iter().map(|(_, c)| c))).filter(|e| !e.dir);
     let (total_files, total_bytes) = (files().count() as u64, files().map(|e| e.size).sum());
     let mut ctx = Ctx::new(env, total_bytes, total_files);
     let mut cache: HashMap<String, HashSet<String>> = HashMap::new();
-    let mut copier = Copier { second: None, opener: open_second };
 
     for (src, e, kids) in &tops {
         let chosen = {
-            let names = dir_names(&mut cache, s, dest).await?;
+            let names = dir_names(&mut cache, sides.dst(), dest).await?;
             resolve_conflict(&mut ctx, |n| names.contains(n), &e.name, &path::join(dest, &e.name), e.dir).await?
         };
         let Some(chosen) = chosen else { continue };
@@ -471,24 +543,24 @@ async fn copy(s: &mut Session, paths: &[String], dest: &str, env: Env, open_seco
             c.insert(chosen.clone());
         }
         if !e.dir {
-            copier.file(&mut ctx, s, src, &top, e.size, &e.name).await?;
+            sides.file(&mut ctx, src, &top, e.size, &e.name).await?;
             continue;
         }
-        ensure_dir(s, &mut cache, &top).await?;
+        ensure_dir(sides.dst(), &mut cache, &top).await?;
         for (rel, c) in kids {
             let target = path::join(&top, rel);
             if c.dir {
-                ensure_dir(s, &mut cache, &target).await?;
+                ensure_dir(sides.dst(), &mut cache, &target).await?;
                 continue;
             }
             let (parent_rel, name) = rel.rsplit_once('/').unwrap_or(("", rel));
             let tparent = path::join(&top, parent_rel);
             let picked = {
-                let names = dir_names(&mut cache, s, &tparent).await?;
+                let names = dir_names(&mut cache, sides.dst(), &tparent).await?;
                 resolve_conflict(&mut ctx, |n| names.contains(n), name, &target, false).await?
             };
             let Some(picked) = picked else { continue };
-            copier.file(&mut ctx, s, &path::join(src, rel), &path::join(&tparent, &picked), c.size, &format!("{}/{rel}", e.name)).await?;
+            sides.file(&mut ctx, &path::join(src, rel), &path::join(&tparent, &picked), c.size, &format!("{}/{rel}", e.name)).await?;
             if let Some(set) = cache.get_mut(&tparent) {
                 set.insert(picked);
             }
@@ -517,6 +589,32 @@ mod tests {
         g.disarm();
         drop(g);
         assert!(part.exists());
+    }
+
+    #[test]
+    fn content_type_rule() {
+        assert_eq!(copy_content_type(Some("text/csv; charset=utf-8".into()), "/a/data"), "text/csv; charset=utf-8");
+        assert_eq!(copy_content_type(None, "/a/b.json"), "application/json");
+        assert_eq!(copy_content_type(None, "/a/noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn crosscopy_job_from_json() {
+        // same_space 는 웹뷰가 보내도 무시된다 (백엔드가 접속 설정으로 정한다)
+        let j: Job = serde_json::from_str(r#"{"kind":"crosscopy","paths":["/a"],"dest_conn_id":"c2","dest_dir":"/b","same_space":true}"#).unwrap();
+        assert!(matches!(j, Job::CrossCopy { ref dest_conn_id, same_space: false, .. } if dest_conn_id == "c2"));
+        assert!(j.pick_id().is_none());
+    }
+
+    #[test]
+    fn same_file_space_rule() {
+        use crate::store::config::{ConnectionConfig, Driver};
+        let sftp = ConnectionConfig { id: "a".into(), driver: Driver::Sftp, host: "Example.com".into(), port: 22, user: "u".into(), ..Default::default() };
+        assert!(super::super::same_file_space(&sftp, &ConnectionConfig { id: "b".into(), host: "example.com".into(), ..sftp.clone() }));
+        assert!(!super::super::same_file_space(&sftp, &ConnectionConfig { user: "other".into(), ..sftp.clone() }));
+        assert!(!super::super::same_file_space(&sftp, &ConnectionConfig { port: 2222, ..sftp.clone() }));
+        let s3 = ConnectionConfig { driver: Driver::S3, ..sftp.clone() };
+        assert!(!super::super::same_file_space(&s3, &s3.clone()));
     }
 
     #[test]

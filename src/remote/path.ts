@@ -14,3 +14,9 @@ export const join = (dir: string, name: string) => normalize(`${dir}/${name}`);
 export const parent = (p: string) => normalize(`${normalize(p)}/..`);
 
 export const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+
+/** p 가 dir 자신이거나 그 하위인지 */
+export const isUnder = (p: string, dir: string) => {
+  const [q, d] = [normalize(p), normalize(dir)];
+  return q === d || q.startsWith(d === "/" ? "/" : `${d}/`);
+};

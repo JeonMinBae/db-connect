@@ -1,7 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { api, errorMessage, type TransferConflict, type TransferDone, type TransferJob, type TransferProgress } from "../api";
+import { useConnections } from "../store/connections";
 import { useTabs } from "../store/tabs";
+import { toast } from "../store/ui";
 
 export type TransferStatus = "queued" | "running" | "done" | "failed" | "canceled";
 
@@ -61,6 +63,14 @@ export function subscribeDone(tabId: string, cb: (it: TransferItem) => void): ()
   return () => void set.delete(cb);
 }
 
+const anyDoneListeners = new Set<(it: TransferItem) => void>();
+
+/** 어느 탭의 전송이든 끝나면 호출된다. 접속 간 복사의 대상 탭이 목록을 새로 고칠 때 쓴다 */
+export function subscribeAnyDone(cb: (it: TransferItem) => void): () => void {
+  anyDoneListeners.add(cb);
+  return () => void anyDoneListeners.delete(cb);
+}
+
 export const useTransfers = create<TransfersState>((set, get) => {
   const patch = (id: string, p: Partial<TransferItem>) => set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, ...p } : i)) }));
 
@@ -71,6 +81,7 @@ export const useTransfers = create<TransfersState>((set, get) => {
     set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, ...p } : i)), asks: s.asks.filter((a) => a.job_id !== id) }));
     const after = get().items.find((i) => i.id === id)!;
     doneListeners.get(it.tabId)?.forEach((cb) => cb(after));
+    anyDoneListeners.forEach((cb) => cb(after));
     get().pump(it.tabId);
   };
 
@@ -87,7 +98,17 @@ export const useTransfers = create<TransfersState>((set, get) => {
         patch(it.id, { status: "running" });
         api.transferStart(it.connId, it.id, it.job).then(
           (summary) => finish(it.id, { status: "done", summary }),
-          (e) => (canceledByUser.has(it.id) ? finish(it.id, { status: "canceled" }) : finish(it.id, { status: "failed", error: errorMessage(e) })),
+          (e) => {
+            if (canceledByUser.has(it.id)) return finish(it.id, { status: "canceled" });
+            const error = errorMessage(e);
+            finish(it.id, { status: "failed", error });
+            // 패널이 접혀 있거나 다른 탭을 보고 있어도 알 수 있게
+            if (it.job.kind === "crosscopy") {
+              const dst = it.job.dest_conn_id;
+              const name = useConnections.getState().configs.find((c) => c.id === dst)?.name ?? dst;
+              toast(`다른 접속으로 복사 실패 (대상: ${name}): ${error}`, "error");
+            }
+          },
         );
       }
     },

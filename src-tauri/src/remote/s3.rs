@@ -8,7 +8,7 @@ use s3::creds::Credentials;
 use s3::error::S3Error;
 use s3::serde_types::ListBucketResult;
 use s3::{Bucket, Region};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use super::io::Counting;
 use super::{path, Entry, Stamp};
@@ -354,6 +354,25 @@ impl S3Session {
         let (bucket, key) = self.target(p).await?;
         let mut r = Counting::new(reader, counter);
         bucket.put_object_stream(&mut r, rp(&key)).await.map_err(s3_err)?;
+        Ok(())
+    }
+
+    /// 객체의 Content-Type (없으면 None)
+    pub async fn content_type(&mut self, p: &str) -> AppResult<Option<String>> {
+        let (bucket, key) = self.target(p).await?;
+        let (h, _) = bucket.head_object(rp(&key)).await.map_err(s3_err)?;
+        Ok(h.content_type.filter(|c| !c.is_empty()))
+    }
+
+    /// Content-Type 을 지정해 올린다. 길이를 모르는 스트림 업로드는 0바이트에서 불안정해 첫 바이트를 보고 빈 파일은 한 번에 PUT 한다.
+    pub async fn upload_typed(&mut self, p: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>, content_type: &str) -> AppResult<()> {
+        let (bucket, key) = self.target(p).await?;
+        let mut r = BufReader::new(Counting::new(reader, counter));
+        if r.fill_buf().await.map_err(|e| AppError::Remote(e.to_string()))?.is_empty() {
+            bucket.put_object_with_content_type(rp(&key), b"", content_type).await.map_err(s3_err)?;
+        } else {
+            bucket.put_object_stream_with_content_type(&mut r, rp(&key), content_type).await.map_err(s3_err)?;
+        }
         Ok(())
     }
 
