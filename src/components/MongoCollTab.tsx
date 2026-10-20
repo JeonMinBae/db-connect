@@ -3,7 +3,8 @@ import { api, errorMessage } from "../api";
 import type { Cell, ConnectionConfig } from "../api/types";
 import { PendingChanges } from "../grid/pending";
 import type { MongoOp } from "../mongo/console";
-import { columnInfosOf, docColumns, docRows, mongoEditInfo, mongoOps, MISSING, UNSET } from "../mongo/docs";
+import type { SelStats } from "../grid/selStats";
+import { columnInfosOf, docColumns, docRows, mongoEditInfo, mongoNumberOf, mongoOps, MISSING, UNSET } from "../mongo/docs";
 import { formatShell, parseShellValue, ShellError, type EJson } from "../mongo/shell";
 import { usePrefs } from "../store/prefs";
 import { useTabs } from "../store/tabs";
@@ -13,6 +14,7 @@ import { runExport } from "./exportMenu";
 import { MongoSubmitPreview } from "./MongoSubmitPreview";
 import { ResultGrid, type GridApi, type ResultGridHandle } from "./ResultGrid";
 import { SqlEditor, type SqlEditorHandle } from "./SqlEditor";
+import { StatusCells } from "./StatusCells";
 import { Modal, showContextMenu, type MenuEntry } from "./ui";
 
 /** 입력란 텍스트 → Canonical EJSON 문자열 (빈 칸은 빈 객체) */
@@ -52,6 +54,7 @@ export const MongoCollTab = memo(function MongoCollTab(props: { tabId: string; c
   const [sort, setSort] = useState<Sort>(null);
   const [version, setVersion] = useState(0);
   const [selRows, setSelRows] = useState(0);
+  const [selStats, setSelStats] = useState<SelStats | null>(null);
   const [preview, setPreview] = useState<MongoOp[] | null>(null);
   const [docEdit, setDocEdit] = useState<{ row: number; text: string } | null>(null);
   const pageSize = usePrefs((s) => s.pageSize);
@@ -305,6 +308,8 @@ export const MongoCollTab = memo(function MongoCollTab(props: { tabId: string; c
             headerSuffix={headerSuffix}
             pkCols={cols.map((c) => c === "_id")}
             onSelectedRows={setSelRows}
+            onSelStats={setSelStats}
+            numberOf={mongoNumberOf}
             menuItems={menuItems}
           />
         )}
@@ -329,7 +334,7 @@ export const MongoCollTab = memo(function MongoCollTab(props: { tabId: string; c
         )}
         {res && (
           <div className="statusbar">
-            <span>{res.ms} ms</span>
+            <StatusCells ms={res.ms} msTitle="페치 시간: 요청부터 응답까지" stats={view === "grid" ? selStats : null} />
             <span className="spacer" />
             <button className="icon" disabled={loading || res.skip === 0} onClick={() => void load(Math.max(0, res.skip - pageSize))} title="이전 페이지">
               ◀

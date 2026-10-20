@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, errorMessage, type SubmitReq } from "../api";
 import type { ColumnMeta, SqlConfig } from "../api/types";
 import { PendingChanges } from "../grid/pending";
+import type { SelStats } from "../grid/selStats";
 import { clientOrder, cycleSort, sortSuffix, type SortKey } from "../grid/sort";
 import { buildSubmit, rowKey } from "../grid/submit";
 import type { ResultEntry, useRunner } from "../grid/useRunner";
@@ -80,6 +81,7 @@ export function EditableResult({ entry, runner, scheme, ctx }: { entry: ResultEn
 
   /** Submit: 실제로 나갈 SQL을 미리보기 모달로 보여 주고, 모달에서 반영한다 */
   const [preview, setPreview] = useState<{ req: SubmitReq; rows: number[] } | null>(null);
+  const [selStats, setSelStats] = useState<SelStats | null>(null);
   const submitting = !!preview;
   const submit = () => {
     if (!info || !table || pending.isEmpty || preview) return;
@@ -254,6 +256,7 @@ export function EditableResult({ entry, runner, scheme, ctx }: { entry: ResultEn
         key={entry.key}
         pkCols={pkCols}
         onSelectedRows={setSelRows}
+        onSelStats={setSelStats}
         columns={r.columns}
         rows={r.rows}
         scheme={scheme}
@@ -265,7 +268,7 @@ export function EditableResult({ entry, runner, scheme, ctx }: { entry: ResultEn
         order={order}
         menuItems={(a) => exportMenuItems(a, entry, r.columns, ctx.cfg, ctx.consoleId, table ? { schema, table: table.table } : null)}
       />
-      <PagingBar entry={entry} runner={runner} guard={guard}>
+      <PagingBar entry={entry} runner={runner} guard={guard} stats={selStats}>
         {clientSorted && <span title="콘솔 결과의 헤더 정렬은 서버에 다시 묻지 않고 지금 받은 행만 정렬합니다">정렬: 현재 페이지만</span>}
       </PagingBar>
     </>

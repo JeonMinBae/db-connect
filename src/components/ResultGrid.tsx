@@ -13,6 +13,7 @@ import type { Cell, ColumnInfo } from "../api/types";
 import { columnWidths, isNumericType, toGridCell } from "../grid/cells";
 import type { PendingChanges } from "../grid/pending";
 import { editorKind, provideEditor, type CellWithCtx, type EditCtx } from "../grid/editors";
+import { forEachSelectedCell, selectionStats, sqlNumberOf, type NumberOf, type SelStats } from "../grid/selStats";
 import type { EditInfo } from "../sql/editable";
 import { cellColors, gridThemes, type Scheme } from "../theme";
 import { showContextMenu, type MenuEntry } from "./ui";
@@ -82,6 +83,10 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
   pkCols?: boolean[];
   /** 선택된 행 수가 바뀌면 호출 (툴바의 삭제 버튼용) */
   onSelectedRows?: (n: number) => void;
+  /** 선택한 칸의 개수·합계·평균이 바뀌면 호출 (상태 표시줄용) */
+  onSelStats?: (s: SelStats) => void;
+  /** 칸 값을 숫자로 읽는 방법 (기본: 숫자 타입 컬럼의 값만) */
+  numberOf?: NumberOf;
 }>(function ResultGrid(props, handle) {
   const { columns: cols, scheme, edit } = props;
   const ref = useRef<DataEditorRef>(null);
@@ -179,21 +184,19 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
     edit!.changed();
   };
 
+  /** Ctrl 클릭으로 더한 범위(rangeStack)까지 */
+  const ranges = sel.current ? [sel.current.range, ...sel.current.rangeStack] : [];
   const selectedRows = (): number[] => {
     const rows = new Set<number>(sel.rows.toArray());
-    if (sel.current) {
-      const r = sel.current.range;
-      for (let y = r.y; y < r.y + r.height; y++) rows.add(y);
-    }
+    for (const r of ranges) for (let y = r.y; y < r.y + r.height; y++) rows.add(y);
     return [...rows].map(d).sort((a, b) => a - b);
   };
+  /** 선택한 칸들 (데이터 좌표, 겹친 칸은 한 번) */
+  const visitSelected = (fn: (col: number, row: number) => void) =>
+    forEachSelectedCell(ranges, sel.rows.toArray(), sel.columns.toArray(), { cols: cols.length, rows: rowCount }, (x, y) => fn(dc(x), d(y)));
   const selectedCells = (): [number, number][] => {
     const out: [number, number][] = [];
-    if (sel.current) {
-      const r = sel.current.range;
-      for (let y = r.y; y < r.y + r.height; y++) for (let x = r.x; x < r.x + r.width; x++) out.push([dc(x), d(y)]);
-    }
-    for (const y of sel.rows.toArray()) for (let x = 0; x < cols.length; x++) out.push([x, d(y)]);
+    visitSelected((x, y) => out.push([x, y]));
     return out;
   };
 
@@ -230,8 +233,16 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
   }));
 
   const onSelectedRows = props.onSelectedRows;
-  const selRowCount = sel.rows.length + (sel.current ? sel.current.range.height : 0);
+  const selRowCount = sel.rows.length + ranges.reduce((n, r) => n + r.height, 0);
   useEffect(() => onSelectedRows?.(selRowCount), [selRowCount]);
+
+  const onSelStats = props.onSelStats;
+  const numberOf = useMemo(() => props.numberOf ?? sqlNumberOf(numericCols), [props.numberOf, numericCols]);
+  useEffect(() => {
+    if (!onSelStats) return;
+    const value = (x: number, y: number) => (p ? p.value(y, x) : props.rows[y][x]);
+    onSelStats(selectionStats(visitSelected, value, numberOf));
+  }, [sel, props.rows, props.version, order, colOrder, numberOf]);
 
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
     if (!edit) return;
@@ -301,6 +312,7 @@ export const ResultGrid = forwardRef<ResultGridHandle, {
         getCellsForSelection={true}
         gridSelection={sel}
         onGridSelectionChange={setSel}
+        rangeSelect="multi-rect"
         rowMarkers={{ kind: "clickable-number", startIndex: props.rowOffset + 1, width: 56 }}
         onColumnResize={(_c, w, x) => setWidths((s) => ({ ...s, [dc(x)]: w }))}
         onColumnMoved={onColumnMoved}
