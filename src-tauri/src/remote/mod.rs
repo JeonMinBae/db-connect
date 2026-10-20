@@ -167,6 +167,22 @@ impl Session {
         }
     }
 
+    /// S3 객체의 Content-Type. S3 가 아니면 None.
+    pub async fn content_type(&mut self, path: &str) -> AppResult<Option<String>> {
+        match self {
+            Self::S3(s) => s.content_type(path).await,
+            _ => Ok(None),
+        }
+    }
+
+    /// 접속 간 복사용 업로드. S3 만 content_type 을 쓰고 나머지는 upload 와 같다.
+    pub async fn upload_typed(&mut self, path: &str, reader: impl AsyncRead + Unpin + Send, counter: Arc<AtomicU64>, content_type: &str) -> AppResult<()> {
+        match self {
+            Self::S3(s) => s.upload_typed(path, reader, counter, content_type).await,
+            _ => self.upload(path, reader, counter).await,
+        }
+    }
+
     /// S3 전용: 사전서명 GET URL
     pub async fn presign(&mut self, path: &str, expires_secs: u32) -> AppResult<String> {
         match self {

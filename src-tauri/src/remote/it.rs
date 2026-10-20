@@ -418,3 +418,19 @@ async fn s3_presign_and_bad_key() {
     let mut bad = Session::open(&s3_cfg("it-bucket"), Some("wrong-secret"), &tmp()).await.unwrap();
     assert!(matches!(bad.list("/").await, Err(AppError::User(_))));
 }
+
+/// Content-Type 지정 업로드와 0바이트 업로드
+#[tokio::test]
+#[ignore]
+async fn s3_upload_typed() {
+    let mut s = Session::open(&s3_cfg("it-bucket"), Some("minioadmin"), &tmp()).await.unwrap();
+    let base = format!("/it-{}", uuid::Uuid::new_v4());
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    s.upload_typed(&format!("{base}/data"), &b"a,b\n"[..], counter.clone(), "text/csv; charset=utf-8").await.unwrap();
+    s.upload_typed(&format!("{base}/empty.bin"), &b""[..], counter.clone(), "application/octet-stream").await.unwrap();
+    assert_eq!(s.content_type(&format!("{base}/data")).await.unwrap().as_deref(), Some("text/csv; charset=utf-8"));
+    let (e, _) = s.stat(&format!("{base}/empty.bin")).await.unwrap().unwrap();
+    assert_eq!((e.dir, e.size), (false, 0));
+    assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 4);
+    ops::delete_tree(&mut s, &base).await.unwrap();
+}
