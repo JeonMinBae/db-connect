@@ -25,9 +25,11 @@ interface Props {
   onDropPick?: (pick: Pick) => void;
   /** 이 탭이 활성일 때만 드롭을 받는다 */
   active: boolean;
-  /** 탭 로컬 클립보드 (잘라내기·복사). 접속이 다르면 붙여넣기 비활성 */
+  /** 앱 전역 클립보드 (잘라내기·복사). 다른 접속의 항목도 붙여넣을 수 있다(분기·확인은 호출자) */
   clipboard: Clip | null;
   onClip: (mode: "cut" | "copy", paths: string[]) => void;
+  /** 선택 항목을 다른 접속으로 복사 (대화상자는 호출자가 연다) */
+  onCrossCopy: (paths: string[]) => void;
   onPaste: (destDir: string) => void;
   /** 목록 안 드래그: 폴더 위에 놓으면 이동, copy 면 복사 */
   onTransfer: (paths: string[], destDir: string, copy: boolean) => void;
@@ -169,7 +171,7 @@ export function FileList(props: Props) {
     if (!targets.length) return;
     props.onClip(mode, targets.map((t) => join(path, t.name)));
   };
-  const canPaste = !cfg.read_only && !!props.clipboard && props.clipboard.connId === cfg.id;
+  const canPaste = !cfg.read_only && !!props.clipboard;
 
   // 폴더 행으로 끌어다 놓기: HTML5 DnD 는 Tauri 의 파일 드롭이 가로채므로 포인터 이벤트로 직접 처리한다
   const [drag, setDrag] = useState<{ x: number; y: number; label: string; target: string | null; copy: boolean } | null>(null);
@@ -280,7 +282,13 @@ export function FileList(props: Props) {
       items.push({ label: "이름 변경…", onClick: () => void rename(r), disabled: ro || targets.length !== 1 });
       items.push({ label: "삭제…", onClick: () => void remove(targets), disabled: ro });
       if (cfg.driver !== "s3") items.push({ label: "권한 변경…", onClick: () => void chmod(targets), disabled: ro });
-      items.push("sep", { label: "잘라내기", onClick: () => clip("cut", targets), disabled: ro }, { label: "복사", onClick: () => clip("copy", targets) });
+      items.push(
+        "sep",
+        { label: "잘라내기", onClick: () => clip("cut", targets), disabled: ro },
+        { label: "복사", onClick: () => clip("copy", targets) },
+        // 원본은 읽기만 하므로 읽기 전용이어도 된다
+        { label: "다른 접속으로 복사…", onClick: () => props.onCrossCopy(targets.map((t) => join(path, t.name))), disabled: !targets.length },
+      );
       if (cfg.driver === "s3" && !r.dir) items.push("sep", { label: "사전서명 URL 복사…", onClick: () => void presign(r), disabled: targets.length !== 1 });
     }
     items.push({ label: "붙여넣기", onClick: () => props.onPaste(path), disabled: !canPaste });

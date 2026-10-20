@@ -1,11 +1,14 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
-import { History, type Clip } from "../../remote/browser";
+import { History, pasteKind, pathsLabel } from "../../remote/browser";
+import { useRemoteClip } from "../../remote/clipboard";
 import { join, normalize, parent } from "../../remote/path";
-import { subscribeDone, useTransfers } from "../../remote/transfers";
+import { subscribeAnyDone, subscribeDone, useTransfers } from "../../remote/transfers";
+import { useConnections } from "../../store/connections";
 import { toast } from "../../store/ui";
 import { Splitter, showContextMenu } from "../ui";
+import { CrossCopyDialog, type CrossReq } from "./CrossCopyDialog";
 import { FileList } from "./FileList";
 import { FolderTree, type FolderTreeHandle } from "./FolderTree";
 import { TransferPanel } from "./TransferPanel";
@@ -78,11 +81,12 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
     refresh();
   };
 
-  const [clip, setClip] = useState<Clip | null>(null);
+  const clip = useRemoteClip((s) => s.clip);
+  const setClip = useRemoteClip((s) => s.setClip);
+  const [cross, setCross] = useState<CrossReq | null>(null);
 
   const copyTo = (paths: string[], dest: string) => {
-    const what = paths.length === 1 ? paths[0].split("/").pop() : `${paths.length}개 항목`;
-    useTransfers.getState().enqueue(props.tabId, cfg.id, `⧉ ${what} → ${dest}`, { kind: "copy", paths, dest_dir: dest });
+    useTransfers.getState().enqueue(props.tabId, cfg.id, `⧉ ${pathsLabel(paths)} → ${dest}`, { kind: "copy", paths, dest_dir: dest });
   };
 
   const moveTo = async (paths: string[], dest: string): Promise<boolean> => {
@@ -101,9 +105,21 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
 
   const paste = async (dest: string) => {
     if (cfg.read_only) return toast("읽기 전용 접속입니다", "error");
-    if (!clip || clip.connId !== cfg.id) return;
-    if (clip.mode === "copy") copyTo(clip.paths, dest);
+    if (!clip) return;
+    const kind = pasteKind(clip, cfg.id);
+    if (kind === "cross") {
+      if (useConnections.getState().status[clip.connId] !== "connected") return toast("원본 접속이 끊겨 있습니다. 다시 접속한 뒤 붙여넣으세요.", "error");
+      return setCross({ srcConnId: clip.connId, paths: clip.paths, fixed: { connId: cfg.id, dir: dest }, cut: clip.mode === "cut" });
+    }
+    if (kind === "copy") copyTo(clip.paths, dest);
     else if (await moveTo(clip.paths, dest)) setClip(null);
+  };
+
+  // 작업은 시작한 이 탭의 큐에 넣는다. transferStart 의 connId 는 원본 접속이다
+  const startCross = (req: CrossReq, destConnId: string, destDir: string) => {
+    const dstName = useConnections.getState().configs.find((c) => c.id === destConnId)?.name ?? destConnId;
+    useTransfers.getState().enqueue(props.tabId, req.srcConnId, `⇄ ${pathsLabel(req.paths)} → ${dstName}:${destDir}`, { kind: "crosscopy", paths: req.paths, dest_conn_id: destConnId, dest_dir: destDir });
+    setCross(null);
   };
 
   const transfer = (paths: string[], dest: string, copy: boolean) => {
@@ -162,6 +178,14 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
       }),
     [props.tabId],
   );
+  // 접속 간 복사는 다른 탭에서 시작했을 수도 있어 전역 완료 알림으로 대상 접속 탭을 갱신한다
+  useEffect(
+    () =>
+      subscribeAnyDone((it) => {
+        if (it.job.kind === "crosscopy" && it.job.dest_conn_id === cfg.id) onUploaded.current(it.job.dest_dir);
+      }),
+    [cfg.id],
+  );
 
   return (
     <>
@@ -198,11 +222,12 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
           <FolderTree ref={tree} connId={cfg.id} current={path} showHidden={showHidden} onOpen={(p) => void go(p)} />
         </div>
         <Splitter dir="v" size={treeWidth} onResize={setTreeWidth} min={120} max={600} />
-        <FileList cfg={cfg} active={props.active} clipboard={clip} onClip={(mode, paths) => setClip({ mode, connId: cfg.id, paths })} onPaste={(d) => void paste(d)} onTransfer={transfer} onDropPick={enqueueUpload} onDownload={(t) => void download(t)} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
+        <FileList cfg={cfg} active={props.active} clipboard={clip} onClip={(mode, paths) => setClip({ mode, connId: cfg.id, paths })} onCrossCopy={(paths) => setCross({ srcConnId: cfg.id, paths, fixed: null, cut: false })} onPaste={(d) => void paste(d)} onTransfer={transfer} onDropPick={enqueueUpload} onDownload={(t) => void download(t)} path={path} entries={entries} loading={loading} showHidden={showHidden} filter={filter} onOpenDir={(p) => void go(p)} onChanged={changed} onRefresh={refresh} />
       </div>
       <div className="remote-footer">
         <TransferPanel tabId={props.tabId} />
       </div>
+      {cross && <CrossCopyDialog req={cross} onSubmit={(id, d) => startCross(cross, id, d)} onClose={() => setCross(null)} />}
     </>
   );
 });
