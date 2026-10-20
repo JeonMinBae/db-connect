@@ -1,4 +1,4 @@
-# db-connect 작업 계획서
+# data-connector 작업 계획서
 
 [DESIGN.md](DESIGN.md)를 기준으로 한 구현 계획이다. 각 task는 하나씩 끝내고 검증할 수 있는 단위이며, 아래 세 부분으로 구성된다.
 
@@ -13,7 +13,7 @@
 ### 0.1 디렉터리 구조
 
 ```
-db-connect/
+data-connector/
 ├─ mise.toml
 ├─ package.json / vite.config.ts / tsconfig.json
 ├─ src/                          # React + TS
@@ -180,7 +180,7 @@ impl serde::Serialize for AppError {
 **작업 내용**
 - `ConnectionConfig`(id, name, driver, host, port, database, user, ssl_mode, ssl_root_cert, sqlite_path, read_only, color)를 정의한다.
 - 접속 목록은 `app_data_dir/connections.json`에 저장한다. 비밀번호 필드는 두지 않는다.
-- 비밀번호는 `keyring::Entry::new("db-connect", &id)`로 저장, 조회, 삭제한다.
+- 비밀번호는 `keyring::Entry::new("data-connector", &id)`로 저장, 조회, 삭제한다.
 - 커맨드: `list_connections`, `save_connection(config, password: Option<String>)`, `delete_connection(id)`.
   - `password`가 `None`이면 기존 비밀번호를 유지하고, 빈 문자열이면 삭제한다.
   - 접속을 삭제하면 키체인 항목도 지운다.
@@ -189,7 +189,7 @@ impl serde::Serialize for AppError {
 
 ```rust
 // store/secrets.rs
-const SERVICE: &str = "db-connect";
+const SERVICE: &str = "data-connector";
 pub fn set_password(id: &str, pw: &str) -> Result<(), AppError> {
     keyring::Entry::new(SERVICE, id)?.set_password(pw)?; Ok(())
 }
@@ -215,7 +215,7 @@ ConnectionDialog.onSave
 **완료 조건**
 - 접속을 저장하고 앱을 재시작해도 목록이 유지된다.
 - `connections.json`에 비밀번호 문자열이 없다.
-- Windows 자격 증명 관리자에 `db-connect` 항목이 생기고, 접속을 삭제하면 사라진다.
+- Windows 자격 증명 관리자에 `data-connector` 항목이 생기고, 접속을 삭제하면 사라진다.
 - `config::upsert`/`remove`에 대한 단위 테스트(임시 디렉터리 사용)가 통과한다.
 
 ---
@@ -242,7 +242,7 @@ pub async fn open(cfg: &ConnectionConfig, pw: Option<String>) -> Result<DbPool, 
     Ok(match cfg.driver {
         Driver::Postgres => {
             let mut o = PgConnectOptions::new().host(&cfg.host).port(cfg.port).database(&cfg.database)
-                .username(&cfg.user).ssl_mode(cfg.ssl_mode.into()).application_name("db-connect");
+                .username(&cfg.user).ssl_mode(cfg.ssl_mode.into()).application_name("data-connector");
             if let Some(p) = &pw { o = o.password(p); }
             if let Some(ca) = &cfg.ssl_root_cert { o = o.ssl_root_cert(ca); }
             DbPool::Pg(opts().connect_with(o).await?)
@@ -1215,7 +1215,7 @@ export function redisCommands(kind: RedisType, key: string, p: PendingChanges): 
 ### G01. MongoDB 연결 · URI · 읽기 전용 검사 ✅ (단위 테스트 완료 · 서버 검증은 Docker 준비 후)
 
 **작업 내용**
-- `db/mongo.rs`: URI 파싱(`ClientOptions::parse`, srv 포함) + 키체인 비밀번호 주입, `appName = db-connect`.
+- `db/mongo.rs`: URI 파싱(`ClientOptions::parse`, srv 포함) + 키체인 비밀번호 주입, `appName = data-connector`.
 - 연결 테스트는 `ping` + `buildInfo` 버전 + 토폴로지(standalone/replicaset/sharded)를 보여 준다. 토폴로지는 `Connected`에 기록한다(트랜잭션 가능 여부).
 - 읽기 전용 검사: 작업 종류로 판단한다. insert/update/delete/replace/findAndModify/drop*/create*/rename, `$out`·`$merge` 단계, runCommand의 쓰기 명령 이름 목록을 거부한다.
 

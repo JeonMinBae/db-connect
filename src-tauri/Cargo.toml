@@ -1,11 +1,11 @@
 [package]
-name = "db-connect"
+name = "data-connector"
 version = "0.1.0"
 description = "Lightweight DB client"
 edition = "2021"
 
 [lib]
-name = "db_connect_lib"
+name = "data_connector_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "db-connect",
+  "productName": "data-connector",
   "version": "0.1.0",
-  "identifier": "com.dbconnect.app",
+  "identifier": "com.dataconnector.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "db-connect",
+        "title": "data-connector",
         "width": 1280,
         "height": 800,
         "minWidth": 720,

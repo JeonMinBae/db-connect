@@ -1,4 +1,4 @@
-name: db-connect-fixtures
+name: data-connector-fixtures
 services:
   pg:
     image: postgres:16-alpine

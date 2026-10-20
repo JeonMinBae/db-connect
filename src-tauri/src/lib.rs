@@ -20,6 +20,7 @@ pub fn run() {
         })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            store::migrate::legacy_data(&dir);
             std::fs::create_dir_all(&dir)?;
             app.manage(state::AppState::new(dir));
             Ok(())

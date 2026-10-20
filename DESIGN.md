@@ -1,4 +1,4 @@
-# db-connect 설계
+# data-connector 설계
 
 JetBrains 데이터 그리드와 비슷한 UI에서 핵심 기능만 갖춘 개인용 데스크톱 DB 접속 툴.
 

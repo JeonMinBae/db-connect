@@ -132,7 +132,7 @@ pub fn build_opts(cfg: &ConnectionConfig, pw: Option<&str>) -> AppResult<Connect
                 .host(connect_host(cfg))
                 .port(cfg.port)
                 .username(&cfg.user)
-                .application_name("db-connect")
+                .application_name("data-connector")
                 .ssl_mode(match cfg.ssl_mode {
                     SslMode::Disable => PgSslMode::Disable,
                     SslMode::Prefer => PgSslMode::Prefer,
