@@ -56,6 +56,26 @@ pub async fn pick_path(app: &AppHandle, save_as: Option<String>) -> AppResult<Op
         .transpose()
 }
 
+/// 파일(여러 개) 또는 폴더(여러 개)를 고른다. 빈 목록이면 취소.
+pub async fn pick_files(app: &AppHandle, dirs: bool) -> AppResult<Vec<PathBuf>> {
+    let app = app.clone();
+    let picked = tokio::task::spawn_blocking(move || {
+        let d = app.dialog().file();
+        if dirs { d.blocking_pick_folders() } else { d.blocking_pick_files() }
+    })
+    .await
+    .map_err(|e| AppError::user(e.to_string()))?;
+    picked.unwrap_or_default().into_iter().map(|p| p.into_path().map_err(|e| AppError::user(e.to_string()))).collect()
+}
+
+pub async fn pick_folder(app: &AppHandle) -> AppResult<Option<PathBuf>> {
+    let app = app.clone();
+    let picked = tokio::task::spawn_blocking(move || app.dialog().file().blocking_pick_folder())
+        .await
+        .map_err(|e| AppError::user(e.to_string()))?;
+    picked.map(|p| p.into_path().map_err(|e| AppError::user(e.to_string()))).transpose()
+}
+
 #[derive(Serialize)]
 pub struct FileResult {
     pub path: String,

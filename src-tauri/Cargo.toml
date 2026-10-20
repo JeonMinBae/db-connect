@@ -16,6 +16,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "postgres", "mysql", "sqlite", "macros"] }
 libsqlite3-sys = { version = "0.30", default-features = false }
+encoding_rs = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "time"] }
 keyring = { version = "3", features = ["windows-native"] }
 serde = { version = "1", features = ["derive"] }
@@ -25,6 +26,11 @@ uuid = { version = "1", features = ["v4"] }
 futures-util = "0.3"
 redis = { version = "1.7", default-features = false, features = ["tokio-native-tls-comp"] }
 mongodb = { version = "3.9", default-features = false, features = ["compat-3-0-0", "rustls-tls", "dns-resolver"] }
+russh = { version = "0.64.1", default-features = false, features = ["ring"] }
+russh-sftp = "3.0.1"
+rust-s3 = { version = "0.38.0", default-features = false, features = ["tokio-native-tls", "fail-on-err"] }
+reqwest = { version = "0.12", default-features = false, features = ["native-tls"] }
+suppaftp = { version = "12.2.1", default-features = false, features = ["tokio", "tokio-async-native-tls", "deprecated"] }
 
 [dev-dependencies]
 tempfile = "3"

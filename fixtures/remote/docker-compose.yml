@@ -1,0 +1,49 @@
+# 원격 파일 통합 테스트용 서버: docker compose -f fixtures/remote/docker-compose.yml up -d
+services:
+  sftp:
+    image: atmoz/sftp
+    command: test:test:::upload
+    ports:
+      - "2222:22"
+  # 명시적 TLS 는 자체서명 인증서(TLS_CN)로 제공. 평문도 허용(--tls=1)
+  ftp:
+    image: stilliard/pure-ftpd
+    # 이미지 기본 명령의 -R(chmod 금지)을 빼고 동시 접속 한도(-c/-C)를 늘린다
+    command: /bin/sh -c '/run.sh -l puredb:/etc/pure-ftpd/pureftpd.pdb -E -j -c 50 -C 20 -P $$PUBLICHOST'
+    ports:
+      - "21:21"
+      - "30000-30009:30000-30009"
+    environment:
+      PUBLICHOST: localhost
+      FTP_USER_NAME: test
+      FTP_USER_PASS: test
+      FTP_USER_HOME: /home/test
+      FTP_PASSIVE_PORTS: "30000:30009"
+      ADDED_FLAGS: "--tls=1"
+      TLS_CN: localhost
+      TLS_ORG: test
+      TLS_C: KR
+  # S3 호환. minio/minio·minio/mc 이미지는 Docker Hub 에서 내려가 rustfs(S3 API, 포트 9000)로 대체.
+  # 버킷 it-bucket·it-bucket2 는 아래 일회성 컨테이너가 만든다
+  s3:
+    image: rustfs/rustfs
+    ports:
+      - "9000:9000"
+    environment:
+      RUSTFS_ACCESS_KEY: minioadmin
+      RUSTFS_SECRET_KEY: minioadmin
+  s3-init:
+    image: amazon/aws-cli
+    depends_on:
+      - s3
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until aws --endpoint-url http://s3:9000 s3 mb s3://it-bucket || aws --endpoint-url http://s3:9000 s3 ls s3://it-bucket; do sleep 1; done
+        aws --endpoint-url http://s3:9000 s3 mb s3://it-bucket2 || aws --endpoint-url http://s3:9000 s3 ls s3://it-bucket2

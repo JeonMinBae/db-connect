@@ -7,3 +7,4 @@ pub mod files;
 pub mod meta;
 pub mod redis;
 pub mod mongo;
+pub mod remote;

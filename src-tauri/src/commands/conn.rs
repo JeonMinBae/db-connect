@@ -7,6 +7,7 @@ use crate::db::mongo::{self, MongoConn, Topology};
 use crate::db::pool::{self, build_opts};
 use crate::db::redis::{self, RedisConn};
 use crate::error::{AppError, AppResult};
+use crate::remote::{self, RemoteConn};
 use crate::state::{AppState, Connected};
 use crate::store::config::{self, ConnectionConfig, Driver};
 use crate::store::secrets;
@@ -58,6 +59,9 @@ pub async fn delete_connection(state: State<'_, AppState>, id: String) -> AppRes
 fn same_target(a: &ConnectionConfig, b: &ConnectionConfig) -> bool {
     let strip = |u: &str| mongo::split_password(u.trim()).0;
     a.driver == b.driver && a.host == b.host && a.port == b.port && a.user == b.user && strip(&a.mongo_uri) == strip(&b.mongo_uri)
+        && a.ssh_key_path == b.ssh_key_path
+        && a.s3_endpoint == b.s3_endpoint
+        && a.s3_bucket == b.s3_bucket
 }
 
 /// password가 None이면 저장된 비밀번호로 테스트한다(편집 다이얼로그에서 비밀번호 칸을 비운 경우).
@@ -79,6 +83,7 @@ pub async fn test_connection(state: State<'_, AppState>, config: ConnectionConfi
     match config.driver {
         Driver::Redis => redis::test(&config, pw).await,
         Driver::Mongodb => mongo::test(&config, pw).await,
+        Driver::Ftp | Driver::Sftp | Driver::S3 => remote::test(&config, pw, &state.data_dir).await,
         _ => pool::test(&config, pw).await,
     }
 }
@@ -102,6 +107,9 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> AppResult<Connec
     if let Some(c) = state.mongo.read().await.get(&id) {
         return Ok(ConnectInfo { default_schema: c.default_db.clone().unwrap_or_default(), topology: Some(c.topology) });
     }
+    if state.remote.read().await.contains_key(&id) {
+        return Ok(ConnectInfo { default_schema: "/".into(), topology: None });
+    }
     let cfg = config::get(&state.data_dir, &id)?;
     let pw = secrets::get_password(&id)?;
     match cfg.driver {
@@ -116,6 +124,11 @@ pub async fn connect(state: State<'_, AppState>, id: String) -> AppResult<Connec
             let info = ConnectInfo { default_schema: c.default_db.clone().unwrap_or_default(), topology: Some(c.topology) };
             state.mongo.write().await.insert(id, Arc::new(c));
             Ok(info)
+        }
+        Driver::Ftp | Driver::Sftp | Driver::S3 => {
+            let c = RemoteConn::open(cfg, pw, state.data_dir.clone()).await?;
+            state.remote.write().await.insert(id, Arc::new(c));
+            Ok(ConnectInfo { default_schema: "/".into(), topology: None })
         }
         _ => {
             let opts = build_opts(&cfg, pw.as_deref())?;
@@ -145,6 +158,7 @@ pub async fn disconnect(state: State<'_, AppState>, id: String) -> AppResult<()>
     }
     // Redis 연결은 마지막 참조가 사라질 때 닫힌다
     state.redis.write().await.remove(&id);
+    state.remote.write().await.remove(&id);
     if let Some(c) = state.mongo.write().await.remove(&id) {
         c.client.clone().shutdown().await;
     }

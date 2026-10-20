@@ -9,16 +9,23 @@ import { TableViewTab } from "./components/TableViewTab";
 import { StructureTab } from "./components/StructureTab";
 import { DropTableHost } from "./components/DropTableDialog";
 import { ExportProgressHost } from "./components/exportMenu";
+import { TransferConflictHost } from "./components/remote/TransferPanel";
 import { ConfirmHost, ContextMenuHost, PromptHost, Splitter, Toasts, showContextMenu } from "./components/ui";
 import { useConnections } from "./store/connections";
-import { isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
-import { useTabs, type Tab } from "./store/tabs";
+import { BrowserTab } from "./components/remote/BrowserTab";
+import { RemoteFileTab } from "./components/remote/RemoteFileTab";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isRemote, isSql, type ConnectionConfig, type SqlConfig } from "./api/types";
+import { dirtyMessage, useTabs, type Tab } from "./store/tabs";
+import { confirmDialog } from "./store/ui";
 import { useColorScheme, type Scheme } from "./theme";
+import { installDropListener } from "./remote/drops";
+import { installTransferListeners } from "./remote/transfers";
 
-const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤" };
+const TAB_ICON: Record<Tab["kind"], string> = { console: "⌨", table: "▦", structure: "⚙", redisKey: "🔑", mongoColl: "▤", remoteBrowser: "🗁", remoteFile: "📝" };
 
 const tabDetail = (t: Tab) =>
-  t.kind === "table" || t.kind === "structure" ? ` · ${t.schema}.${t.table}` : t.kind === "redisKey" ? ` · db${t.db} · ${t.key}` : t.kind === "mongoColl" ? ` · ${t.db}.${t.coll}` : "";
+  t.kind === "table" || t.kind === "structure" ? ` · ${t.schema}.${t.table}` : t.kind === "redisKey" ? ` · db${t.db} · ${t.key}` : t.kind === "mongoColl" ? ` · ${t.db}.${t.coll}` : t.kind === "remoteFile" ? ` · ${t.path}` : "";
 
 /** 탭 종류와 접속 드라이버에 맞는 화면 */
 function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionConfig; scheme: Scheme; active: boolean }) {
@@ -35,6 +42,10 @@ function TabBody({ tab: t, cfg, scheme, active }: { tab: Tab; cfg: ConnectionCon
   if (cfg.driver === "mongodb") {
     if (t.kind === "console") return <MongoConsoleTab tabId={t.id} cfg={cfg} scheme={scheme} active={active} />;
     if (t.kind === "mongoColl") return <MongoCollTab tabId={t.id} cfg={cfg} db={t.db} coll={t.coll} scheme={scheme} active={active} />;
+  }
+  if (isRemote(cfg.driver)) {
+    if (t.kind === "remoteBrowser") return <BrowserTab tabId={t.id} cfg={cfg} active={active} />;
+    if (t.kind === "remoteFile") return <RemoteFileTab tabId={t.id} cfg={cfg} path={t.path} scheme={scheme} active={active} />;
   }
   return <div className="empty">이 접속에서는 열 수 없는 탭입니다</div>;
 }
@@ -68,10 +79,27 @@ export default function App() {
       if (!el.closest("input, textarea, .cm-editor")) e.preventDefault();
     };
     window.addEventListener("contextmenu", noMenu);
+    const uninstallDrop = installDropListener();
+    const uninstallTransfers = installTransferListeners();
     return () => {
+      uninstallDrop();
+      uninstallTransfers();
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("contextmenu", noMenu);
     };
+  }, []);
+
+  // 저장하지 않은 탭이 있으면 종료 전에 확인한다
+  useEffect(() => {
+    const un = getCurrentWindow().onCloseRequested(async (e) => {
+      const { tabs, dirty } = useTabs.getState();
+      const lines = tabs.filter((t) => dirtyMessage(dirty[t.id])).map((t) => `• ${t.title}`);
+      if (!lines.length) return;
+      e.preventDefault();
+      if (await confirmDialog({ title: "종료", body: `저장하지 않은 탭이 있습니다.\n\n${lines.join("\n")}\n\n그래도 종료할까요?`, okLabel: "종료", danger: true }))
+        await getCurrentWindow().destroy();
+    });
+    return () => void un.then((f) => f());
   }, []);
 
   const cfgOf = (id: string) => configs.find((c) => c.id === id);
@@ -137,6 +165,7 @@ export default function App() {
       <PromptHost />
       <DropTableHost />
       <ExportProgressHost />
+      <TransferConflictHost />
       <Toasts />
     </div>
   );

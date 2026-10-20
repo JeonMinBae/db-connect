@@ -1,15 +1,23 @@
 mod commands;
 mod db;
 mod error;
+mod remote;
 mod state;
 mod store;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            // 드롭된 로컬 경로는 백엔드에 두고 웹뷰에는 id 와 이름만 보낸다
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, position }) = event {
+                let pick = window.state::<state::AppState>().picks.register(paths.clone());
+                let _ = window.emit("os-drop", serde_json::json!({ "pick": pick, "x": position.x, "y": position.y }));
+            }
+        })
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
@@ -24,6 +32,22 @@ pub fn run() {
             commands::conn::test_connection,
             commands::conn::connect,
             commands::conn::disconnect,
+            commands::remote::remote_trust_host,
+            commands::remote::pick_key_file,
+            commands::remote::pick_upload,
+            commands::remote::pick_download_target,
+            commands::remote::pick_release,
+            commands::remote::remote_list,
+            commands::remote::remote_mkdir,
+            commands::remote::remote_rename,
+            commands::remote::remote_delete,
+            commands::remote::remote_chmod,
+            commands::remote::remote_move,
+            commands::remote::remote_presign,
+            commands::remote::remote_open_text,
+            commands::remote::remote_save_text,
+            commands::remote::transfer_start,
+            commands::remote::transfer_answer,
             commands::meta::list_schemas,
             commands::meta::list_tables,
             commands::meta::list_columns,

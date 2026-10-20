@@ -1,30 +1,37 @@
-import { useEffect, useRef, useState } from "react";
-import type { ConnDriver as Driver } from "../api/types";
+import { Fragment, useEffect, useRef, useState } from "react";
+import type { ConnDriver } from "../api/types";
 import mongoLogo from "../assets/logos/mongodb.svg";
 import mysqlLogo from "../assets/logos/mysql.svg";
 import pgLogo from "../assets/logos/postgresql.svg";
 import redisLogo from "../assets/logos/redis.svg";
 import sqliteLogo from "../assets/logos/sqlite.svg";
+import ftpLogo from "../assets/logos/ftp.svg";
+import sftpLogo from "../assets/logos/sftp.svg";
+import s3Logo from "../assets/logos/s3.svg";
+
 
 /** 공식 로고 (출처: src/assets/logos/NOTICE.md) */
-export const DRIVER_INFO: Record<Driver, { name: string; logo: string }> = {
+export const DRIVER_INFO: Record<ConnDriver, { name: string; logo: string }> = {
   postgres: { name: "PostgreSQL", logo: pgLogo },
   mysql: { name: "MySQL / MariaDB", logo: mysqlLogo },
   sqlite: { name: "SQLite", logo: sqliteLogo },
   redis: { name: "Redis", logo: redisLogo },
   mongodb: { name: "MongoDB", logo: mongoLogo },
+  ftp: { name: "FTP / FTPS", logo: ftpLogo },
+  sftp: { name: "SFTP", logo: sftpLogo },
+  s3: { name: "S3 호환 (AWS·R2·MinIO)", logo: s3Logo },
 };
 
 /** 글자 크기에 맞춘 작은 로고 */
-export function DbLogo({ driver, size = 14 }: { driver: Driver; size?: number }) {
+export function DbLogo({ driver, size = 14 }: { driver: ConnDriver; size?: number }) {
   return <img src={DRIVER_INFO[driver].logo} width={size} height={size} alt="" className="db-logo" />;
 }
 
 /** 로고가 붙은 드라이버 선택 상자 (기본 select는 옵션에 이미지를 넣을 수 없어 직접 만든다) */
-export function DriverSelect({ value, onChange }: { value: Driver; onChange: (d: Driver) => void }) {
+export function DriverSelect({ value, onChange }: { value: ConnDriver; onChange: (d: ConnDriver) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const drivers = Object.keys(DRIVER_INFO) as Driver[];
+  const drivers = Object.keys(DRIVER_INFO) as ConnDriver[];
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
@@ -41,7 +48,7 @@ export function DriverSelect({ value, onChange }: { value: Driver; onChange: (d:
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
-  const pick = (d: Driver) => {
+  const pick = (d: ConnDriver) => {
     onChange(d);
     setOpen(false);
   };
@@ -65,10 +72,13 @@ export function DriverSelect({ value, onChange }: { value: Driver; onChange: (d:
       {open && (
         <div className="select-list" role="listbox">
           {drivers.map((d) => (
-            <div key={d} role="option" aria-selected={d === value} className={`item${d === value ? " selected" : ""}`} onMouseDown={() => pick(d)}>
-              <DbLogo driver={d} />
-              <span>{DRIVER_INFO[d].name}</span>
-            </div>
+            <Fragment key={d}>
+              {d === "ftp" && <div className="group">파일</div>}
+              <div role="option" aria-selected={d === value} className={`item${d === value ? " selected" : ""}`} onMouseDown={() => pick(d)}>
+                <DbLogo driver={d} />
+                <span>{DRIVER_INFO[d].name}</span>
+              </div>
+            </Fragment>
           ))}
         </div>
       )}

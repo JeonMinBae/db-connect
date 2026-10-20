@@ -527,6 +527,13 @@ body.conn-dragging {
 .select-list .item.selected {
   background: var(--sel);
 }
+.select-list .group {
+  padding: 4px 8px 2px;
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
 .driver {
   font-size: 9px;
   font-weight: 700;
@@ -828,4 +835,167 @@ pre.raw-sql {
 .ctx-menu {
   max-height: 60vh;
   overflow-y: auto;
+}
+
+/* 원격 파일 브라우저 */
+.remote-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.remote-path {
+  flex: 1;
+  min-width: 80px;
+}
+.remote-filter {
+  width: 140px;
+}
+.remote-footer:empty {
+  display: none;
+}
+.remote-footer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.transfer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.transfer-list {
+  overflow: auto;
+}
+.transfer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.transfer-label {
+  flex: 0 1 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-bar {
+  flex: 1;
+  min-width: 80px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  position: relative;
+}
+.transfer-bar > div {
+  height: 100%;
+  background: var(--accent);
+}
+.transfer-bar.indeterminate > div {
+  position: absolute;
+  width: 30% !important;
+  animation: transfer-slide 1.2s linear infinite;
+}
+@keyframes transfer-slide {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+.transfer-stat {
+  flex: none;
+  white-space: nowrap;
+}
+.transfer-status {
+  flex: 0 1 140px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transfer-row.failed .transfer-status {
+  color: var(--danger);
+}
+.file-list {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  position: relative;
+  outline: none;
+  user-select: none;
+}
+.file-list table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.file-list th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 2px 8px;
+  font-weight: normal;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.file-list td {
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.file-list td:first-child {
+  width: 100%;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-list .num {
+  text-align: right;
+}
+.file-list .mono {
+  font-family: monospace;
+}
+.file-list tbody tr:hover {
+  background: var(--bg-3);
+}
+.file-list tbody tr.selected {
+  background: var(--sel);
+}
+.file-list-loading {
+  position: absolute;
+  top: 24px;
+  right: 8px;
+  color: var(--muted);
+}
+.remote-file-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.file-list tbody tr.drop-target {
+  background: var(--sel);
+  outline: 1px solid var(--accent, currentColor);
+  outline-offset: -1px;
+}
+.drag-label {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: nowrap;
 }

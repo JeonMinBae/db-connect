@@ -189,7 +189,7 @@ pub fn build_opts(cfg: &ConnectionConfig, pw: Option<&str>) -> AppResult<Connect
                 .busy_timeout(Duration::from_secs(5));
             ConnectOpts::Lite(o)
         }
-        Driver::Redis | Driver::Mongodb => return Err(AppError::user("SQL 접속이 아닙니다")),
+        Driver::Redis | Driver::Mongodb | Driver::Ftp | Driver::Sftp | Driver::S3 => return Err(AppError::user("SQL 접속이 아닙니다")),
     })
 }
 
