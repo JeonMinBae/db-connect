@@ -119,7 +119,10 @@ export function CrossCopyDialog(props: { req: CrossReq; onSubmit: (destConnId: s
       )}
       <div style={{ marginTop: 10, wordBreak: "break-all", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
         <ConnBadge cfg={src} />
-        <span>· {pathsLabel(req.paths)}</span>
+        <span>
+          · {pathsLabel(req.paths)}
+          {req.paths.length === 1 && " (1개 항목)"}
+        </span>
         <span>→</span>
         <ConnBadge cfg={dst} />
         {dst && <span>:{normalize(dir)}</span>}

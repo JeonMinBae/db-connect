@@ -3,7 +3,7 @@ import { api, errorMessage, type Pick } from "../../api";
 import type { ConnectionConfig, RemoteEntry } from "../../api/types";
 import { History, pasteKind, pathsLabel } from "../../remote/browser";
 import { useRemoteClip } from "../../remote/clipboard";
-import { join, normalize, parent } from "../../remote/path";
+import { isUnder, join, normalize, parent } from "../../remote/path";
 import { subscribeAnyDone, subscribeDone, useTransfers } from "../../remote/transfers";
 import { useConnections } from "../../store/connections";
 import { toast } from "../../store/ui";
@@ -165,11 +165,12 @@ export const BrowserTab = memo(function BrowserTab(props: { tabId: string; cfg: 
     }
   };
 
-  // 업로드가 끝나면(일부만 올라간 경우 포함) 대상이 현재 폴더일 때 목록과 트리를 갱신한다
+  // 업로드·복사가 끝나면(일부만 된 경우 포함) 현재 폴더가 대상이거나 그 하위일 때 목록과 트리를 갱신한다 (폴더 병합 복사)
   const onUploaded = useRef((_dest: string) => {});
   onUploaded.current = (dest) => {
-    tree.current?.invalidate([dest]);
-    if (normalize(dest) === pathRef.current) void load(pathRef.current);
+    const cur = pathRef.current;
+    tree.current?.invalidate([dest, cur]);
+    if (isUnder(cur, dest)) void load(cur);
   };
   useEffect(
     () =>
